@@ -10,6 +10,9 @@
 #include "Windows.h"
 #endif
 
+//Extended eval allows to pass features in batches of different size as long as each feature vector has the same dimension as the network input. 
+#define EXTENDED_EVAL
+
 using namespace Microsoft::MSR::CNTK;
 
 // Used for retrieving the model appropriate for the element type (float / double)
@@ -37,7 +40,13 @@ int main(int argc, char* argv[])
     argc = 0;   
     std::string app = argv[0];
     std::string path; 
+
+#ifdef EXTENDED_EVAL
+    IEvaluateModelExtended<float> *model;
+#else
     IEvaluateModel<float> *model;
+#endif
+
     size_t pos;
     int ret;
 
@@ -65,7 +74,21 @@ int main(int argc, char* argv[])
             return(1);
         }
 
+#ifdef EXTENDED_EVAL
+        // Initialize start
+        GetEvalExtendedF(&model);
+        model->StartForwardEvaluation({ model->GetOutputSchema()[0].m_name });
+        auto m_inputBuffer = model->GetInputSchema().CreateBuffers<float>({ 1 });
+        auto m_outputBuffer = model->GetOutputSchema().CreateBuffers<float>({ 1 });
+        int inDim = 80;
+        bool m_resetRNN = true;
+        // Init input buffer:
+        for (unsigned i = 0; i < inDim; i++)
+            m_inputBuffer[0].m_buffer.push_back(0.0);
+        // Initialize end
+#else
         GetEvalF(&model);
+#endif
 
         // Load model with desired outputs
         std::string networkConfiguration;
@@ -79,6 +102,15 @@ int main(int argc, char* argv[])
         // get the model's layers dimensions
         std::map<std::wstring, size_t> inDims;
         std::map<std::wstring, size_t> outDims;
+
+#ifdef EXTENDED_EVAL
+        // Eval start
+        for (unsigned i = 0; i < inDim; i++)
+            m_inputBuffer[0].m_buffer[i] = 0.1; //specify actual value
+        model->ForwardPass(m_inputBuffer, m_outputBuffer, m_resetRNN);
+        m_resetRNN = false;
+        // Eval end
+#else
         model->GetNodeDimensions(inDims, NodeGroup::nodeInput);
         model->GetNodeDimensions(outDims, NodeGroup::nodeOutput);
 
@@ -109,7 +141,7 @@ int main(int argc, char* argv[])
         {
             fprintf(stderr, "%f\n", value);
         }
-
+#endif
         // This pattern is used by End2EndTests to check whether the program runs to complete.
         fprintf(stderr, "Evaluation complete.\n");
         ret = 0;
