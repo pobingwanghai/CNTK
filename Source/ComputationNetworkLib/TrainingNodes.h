@@ -1604,7 +1604,7 @@ template class LogisticNode<double>;
 // -----------------------------------------------------------------------
 
 template <class ElemType>
-class DropoutNode : public ComputationNode<ElemType>, public NumInputs<1>, public RngUser
+class DropoutNode : public ComputationNode<ElemType>, public NumInputs<1>
 {
     typedef ComputationNode<ElemType> Base;
     UsingComputationNodeMembersBoilerplate;
@@ -1617,9 +1617,9 @@ public:
     DeclareConstructorFromConfigWithNumInputs(DropoutNode);
     DropoutNode(DEVICEID_TYPE deviceId, const wstring& name)
         : Base(deviceId, name),
-          m_dropoutRate(0)
+        m_dropoutRate(0)
     {
-        SetRandomSeed((unsigned long)CreateUniqId());
+        m_randomSeed = (unsigned long)CreateUniqId();
     }
 
     virtual void /*ComputationNode::*/ BackpropTo(const size_t inputIndex, const FrameRange& fr) override
@@ -1676,9 +1676,21 @@ public:
         m_dropoutRate = val;
     }
 
+    void SetRandomSeed(const unsigned long val)
+    {
+        m_randomSeed = (unsigned long)val;
+
+        // Upon change of the seed, reset RNGHandle to force the creation of a new RNGHandle
+        // during forward propagation
+        m_RNGHandle = nullptr;
+    }
+
     RNGHandle& GetRNGHandle()
     {
-        return RngUser::GetRNGHandle(ValuePtr()->GetDeviceId());
+        if (m_RNGHandle == nullptr)
+            m_RNGHandle = RNGHandle::Create(ValuePtr()->GetDeviceId(), m_randomSeed);
+
+        return *m_RNGHandle;
     }
 
     virtual void CopyTo(ComputationNodeBasePtr nodeP, const std::wstring& newName, const CopyNodeFlags flags) const override
@@ -1688,7 +1700,7 @@ public:
         {
             auto node = dynamic_pointer_cast<DropoutNode<ElemType>>(nodeP);
             node->m_dropoutRate = m_dropoutRate;
-            node->SetRandomSeed(m_randomSeed);
+            node->m_randomSeed = m_randomSeed;
             node->m_maskOfDropout = m_maskOfDropout;
         }
     }
@@ -1710,9 +1722,11 @@ public:
 
 private:
     double m_dropoutRate;
+    unsigned long m_randomSeed;
+    std::shared_ptr<RNGHandle> m_RNGHandle;
+
     shared_ptr<Matrix<ElemType>> m_maskOfDropout;
 };
-
 template class DropoutNode<float>;
 template class DropoutNode<double>;
 
