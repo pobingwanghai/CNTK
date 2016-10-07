@@ -443,6 +443,9 @@ public:
     // -----------------------------------------------------------------------
     // functions to pass on specific SGD options to nodes
     // -----------------------------------------------------------------------
+    // TODO: Why are all these static, but then take a network as the first argument? --> make them class members
+    template <class ElemType>
+    static void SetDropoutRate(ComputationNetworkPtr net, const ComputationNodeBasePtr& criterionNode, const double dropoutRate, double& prevDropoutRate, size_t randSeedBase);
 
     // TODO: Why are all these static, but then take a network as the first argument? --> make them class members
     template <class ElemType>
@@ -682,10 +685,31 @@ public:
         return filteredNodes;
     }
 
-    std::list<ComputationNodeBasePtr> GetNodesWithType(const wstring typeName, const ComputationNodeBasePtr& rootNode = nullptr) const
+    std::list<ComputationNodeBasePtr> GetNodesWithType(const wstring typeName, const ComputationNodeBasePtr& rootNode = nullptr)
     {
-        std::function<bool(const ComputationNodeBasePtr&)> predicate = [typeName](const ComputationNodeBasePtr& node) { return node->OperationName() == typeName; };
-        return GetNodesWhere(predicate, rootNode);
+        std::list<ComputationNodeBasePtr> nodesWithType;
+
+        // find nodes from all available nodes
+        if (rootNode == nullptr)
+        {
+            for (auto nodeIter = m_nameToNodeMap.begin(); nodeIter != m_nameToNodeMap.end(); nodeIter++)
+            {
+                ComputationNodeBasePtr node = nodeIter->second;
+                if (node->OperationName() == typeName)
+                    nodesWithType.push_back(node);
+            }
+        }
+        else
+        {
+            // for calculating a specific node
+            for (const auto& node : GetEvalOrder(rootNode)) // TODO: verify that no use of this requires the actual eval order, then change to GetAllNodesForRoot()
+            {
+                if (node->OperationName() == typeName)
+                    nodesWithType.push_back(node);
+            }
+        }
+
+        return nodesWithType;
     }
 
 public:
