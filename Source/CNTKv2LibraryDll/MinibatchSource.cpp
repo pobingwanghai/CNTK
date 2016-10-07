@@ -154,7 +154,14 @@ namespace CNTK
             if (m_prevMinibatchSize == 0)
             {
                 // TODO: Add support for distributed reading
-                EpochConfiguration epochConfig = { 1, 0, minibatchSizeInSamples, m_epochSize, 0, 0 };
+                EpochConfiguration epochConfig;
+                epochConfig.m_numberOfWorkers = 1;
+                epochConfig.m_workerRank = 0;
+                epochConfig.m_minibatchSizeInSamples = minibatchSizeInSamples;
+                epochConfig.m_truncationSize = 0;
+
+                epochConfig.m_totalEpochSizeInSamples = m_epochSize;
+                epochConfig.m_epochIndex = 0;
 
                 std::map<std::wstring, int> requiredStreams;
                 for (const auto& s : m_streamInfos)
