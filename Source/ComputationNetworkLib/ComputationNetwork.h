@@ -685,33 +685,11 @@ public:
         return filteredNodes;
     }
 
-    std::list<ComputationNodeBasePtr> GetNodesWithType(const wstring typeName, const ComputationNodeBasePtr& rootNode = nullptr)
+    std::list<ComputationNodeBasePtr> GetNodesWithType(const wstring typeName, const ComputationNodeBasePtr& rootNode = nullptr) const
     {
-        std::list<ComputationNodeBasePtr> nodesWithType;
-
-        // find nodes from all available nodes
-        if (rootNode == nullptr)
-        {
-            for (auto nodeIter = m_nameToNodeMap.begin(); nodeIter != m_nameToNodeMap.end(); nodeIter++)
-            {
-                ComputationNodeBasePtr node = nodeIter->second;
-                if (node->OperationName() == typeName)
-                    nodesWithType.push_back(node);
-            }
-        }
-        else
-        {
-            // for calculating a specific node
-            for (const auto& node : GetEvalOrder(rootNode)) // TODO: verify that no use of this requires the actual eval order, then change to GetAllNodesForRoot()
-            {
-                if (node->OperationName() == typeName)
-                    nodesWithType.push_back(node);
-            }
-        }
-
-        return nodesWithType;
+        std::function<bool(const ComputationNodeBasePtr&)> predicate = [typeName](const ComputationNodeBasePtr& node) { return node->OperationName() == typeName; };
+        return GetNodesWhere(predicate, rootNode);
     }
-
 public:
     // return list of nodes that require precomputation and not precomputed yet
     std::list<ComputationNodeBasePtr> GetNodesRequiringPreComputation(const ComputationNodeBasePtr& rootNode = nullptr, bool checkComputed = true);
