@@ -712,7 +712,8 @@ public:
     {
         m_randomSeed = (unsigned long)val;
 
-        m_RNGHandle.reset(); // Reset handle. New handle will be generated with next call of GetRNGHandle(...).
+       //Is below line the reason for Dropout related tests failing?
+       //m_RNGHandle.reset(); // Reset handle. New handle will be generated with next call of GetRNGHandle(...).
     }
 
 protected:
