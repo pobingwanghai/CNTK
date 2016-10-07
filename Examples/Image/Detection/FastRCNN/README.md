@@ -1,6 +1,7 @@
 Install:
 - Install python 2.7.12 (64 bit required for Pascal Voc evaluation) https://www.python.org/downloads/windows/
 - pip install -r requirements64.txt
+- Download the data and the pretrained classification model to the corresponding folders (AlexNet.89 currently)
 
 Setup (in PARAMETERS.py):
 - Change 'rootdir' to the absolute path of the FastRCNN folder of your CNTK repository clone (only forward slashes, has to end with forward slash).
