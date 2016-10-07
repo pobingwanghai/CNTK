@@ -1,20 +1,23 @@
-General:
-- Install python 2.7.12
-- Pip install -r requirements.txt
+Install:
+- Install python 2.7.12 (64 bit required for Pascal Voc evaluation) https://www.python.org/downloads/windows/
+- pip install -r requirements64.txt
 
-in PARAMETERS.py:
-- Change 'rootdir' to the absolute path of the FastRCNN folder of your CNTK repository clone (only forward slashes, has to end with forward slash)
-- for using Pascal VOC data see bottom of this file
-- If you use another data set than the provided toy example or pascal
--- Pick a new name and assign it to 'datasetName'
--- Adjust 'imgDir' to the directory where your images reside
+Setup (in PARAMETERS.py):
+- Change 'rootdir' to the absolute path of the FastRCNN folder of your CNTK repository clone (only forward slashes, has to end with forward slash).
+- If you use the provided toy data set, make sure datasetName is set to "toy". Then proceed as described in 'Running Fast R-CNN' below.
+- For using Pascal VOC data see bottom of this file.
+- If you use another data set than the provided toy example or pascal:
+-- Pick a new name and assign it to 'datasetName'.
+-- Adjust 'imgDir' to the directory where your images reside.
 -- Adjust parameters under 'project-specific parameter' to your data, i.e. classes etc.
+-- You can use scripts C1 and C2 to draw rectangles on new images and assign labels to those rectangles. The scripts will store the annotations in the correct format for CNTK Fast R-CNN.
 
 Running Fast R-CNN:
-- Run scripts A1, A2 and A3
-- 
+- Run scripts A1, A2 and A3. All output will be written to a new subdirectory called 'proc'.
+- Optionally run B scripts to visualize or evaluate after corresponding A step.
 
 Using Pascal data:
 - you need both VOCdevkit2007 and VOCdevkit2012
 - additionally you need selective_search_data
 - in Params set pascalDataDir = pascal root dir ("C:/Temp/Pascal/")
+- in PARAMETERS.py set datasetName = "pascalVoc"
