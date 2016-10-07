@@ -5,7 +5,7 @@
 
 #include "stdafx.h"
 #include "CNTKLibrary.h"
-#include "Utils.h"
+#include "Serialization.h"
 #include "Function.h"
 
 namespace CNTK
@@ -58,9 +58,9 @@ namespace CNTK
         }
     }
 
-    static const std::wstring s_typeValue = L"Variable";
+    static const std::wstring s_variableTypeValue = L"Variable";
 
-    Dictionary Variable::Save() const
+    /*virtual*/ Dictionary Variable::Serialize() const
     {
         if (IsOutput())
         {
@@ -68,13 +68,14 @@ namespace CNTK
         }
         Dictionary dict;
 
-        dict[modelVersionKey] = modelVersion;
-        dict[typeKey] = s_typeValue;
+        dict[versionKey] = CurrentVersion();
+        dict[typeKey] = s_variableTypeValue;
         dict[uidKey] = Uid();
         dict[kindKey] = static_cast<size_t>(Kind());
         dict[dataTypeKey] = static_cast<size_t>(GetDataType());
         const auto& dynamicAxis = DynamicAxes();
-        vector<DictionaryValue> dictionaryValueVector(dynamicAxis.size());
+        vector<DictionaryValue> dictionaryValueVector; 
+        dictionaryValueVector.reserve(dynamicAxis.size());
         for (const auto& axis : dynamicAxis)
         {
             dictionaryValueVector.push_back(axis);
@@ -92,18 +93,13 @@ namespace CNTK
         return dict;
     }
 
-    /*static*/ Variable Variable::Load(const Dictionary& dict)
+    /*static*/ Variable Variable::Load(const Dictionary& dict, const CNTK::DeviceDescriptor& device)
     {
         static const vector<std::wstring> s_requiredDictionaryKeys = { typeKey, uidKey, kindKey, dataTypeKey, dynamicAxisKey, isSparseKey, nameKey, needsGradientKey, shapeKey };
 
-        size_t version = ValidateModelDictionary(dict, s_requiredDictionaryKeys, modelVersion);
+        size_t version = ValidateDictionary<Variable>(dict, s_requiredDictionaryKeys, s_modelVersion);
 
-        const auto& type = dict[typeKey].Value<std::wstring>();
-        if (type != s_typeValue) 
-        {
-            LogicError("Unexpected '%ls':'%ls' in place of 'type':'%ls' "
-                        "(%ls).", typeKey, type, typeKey, s_typeValue, GetModelVersionsString(modelVersion, version));
-        }
+        ValidateType<Variable>(dict, s_variableTypeValue, s_modelVersion);
 
         const auto& uid = dict[uidKey].Value<std::wstring>();
 
@@ -114,7 +110,7 @@ namespace CNTK
             kind != VariableKind::Placeholder)
         {
             LogicError("Unexpected variable '%ls':'%zu' "
-                        "(%ls).", kindKey, kind, GetModelVersionsString(modelVersion, version));
+                        "(%s).", kindKey, kind, GetVersionsString<Variable>(s_modelVersion, version));
         }
         
         DataType dataType = DataType(dict[dataTypeKey].Value<std::size_t>());
@@ -123,11 +119,12 @@ namespace CNTK
             dataType != DataType::Double)
         {
             LogicError("Unexpected variable '%ls':'%zu' "
-                        "(%ls).", dataTypeKey, dataType, GetModelVersionsString(modelVersion, version));
+                        "(%s).", dataTypeKey, dataType, GetVersionsString<Variable>(s_modelVersion, version));
         }
         
         const vector<DictionaryValue>& dictionaryValueVector = dict[dynamicAxisKey].Value<vector<DictionaryValue>>();
-        vector<Axis> dynamicAxis(dictionaryValueVector.size());
+        vector<Axis> dynamicAxis;
+        dynamicAxis.reserve(dictionaryValueVector.size());
         for (const auto& dictionaryValue : dictionaryValueVector)
         {
             dynamicAxis.push_back(dictionaryValue.Value<Axis>());
@@ -141,7 +138,10 @@ namespace CNTK
         if (kind == VariableKind::Constant || kind == VariableKind::Parameter)
         {
             auto& value = dict[valueKey].Value<NDArrayView>();
-            Variable var(shape, kind, dataType, nullptr, value.Alias(), needsGradient, dynamicAxis, isSparse, name, uid);
+
+            // TODO: this copying here is redundant, value should be moved from the dictionary to the variable.
+            // Also, the correct device should be used upfront when deserializing NDArrayView.
+            Variable var(shape, kind, dataType, nullptr, value.DeepClone(device, kind == VariableKind::Constant), needsGradient, dynamicAxis, isSparse, name, uid);
             if (var.IsParameter())
             {
                 return Parameter(var);

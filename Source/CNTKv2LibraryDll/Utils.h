@@ -367,50 +367,16 @@ namespace CNTK
         return MakeSharedObject<NDArrayView>(sourceShape, castValue, sourceSize, DeviceDescriptor::CPUDevice(), readOnly);
     }
 
-    // TODO: refactor, move into ISerializable?
-    const std::wstring modelVersionKey = L"model_version";
-    const std::wstring typeKey = L"type";
-    const std::wstring uidKey = L"uid";
-    const std::wstring kindKey = L"kind";
-    const std::wstring dataTypeKey = L"data_type";
-    const std::wstring dynamicAxisKey = L"dynamic_axis";
-    const std::wstring isSparseKey = L"is_sparse";
-    const std::wstring nameKey = L"name";
-    const std::wstring needsGradientKey = L"needs_gradient";
-    const std::wstring shapeKey = L"shape";
-    const std::wstring valueKey = L"value";
-    const std::wstring opKey = L"op";
-    const std::wstring attributesKey = L"attributes";
-    const std::wstring inputsKey = L"inputs";
-    const std::wstring rootKey = L"root";
-    const std::wstring functionsKey = L"primitive_functions";
-
-    inline std::wstring GetModelVersionsString(size_t currentVersion, size_t dictVersion)
+    template <typename T>
+    inline std::string Typename(const T* = nullptr)
     {
-        std::wstringstream info;
-        info << L"current model version = " << currentVersion 
-             << L", model version in the dictionary = " << dictVersion;
-        return info.str();
-    }
-
-    // Make sure that the dictionary contains all required keys, and if it does, return model version value
-    // from the dictionary.
-    inline size_t ValidateModelDictionary(const Dictionary& dict, const vector<std::wstring> requiredKeys, size_t currentModelVersion)
-    {
-        if (!dict.Contains(modelVersionKey))
+        auto name = typeid(T).name(); 
+        if (strncmp(name, "class ", 6) == 0)
         {
-             LogicError("Required key '%ls' is not found in the dictionary.", modelVersionKey);
-        } 
-        const auto& version = dict[modelVersionKey].Value<size_t>();
-
-        for (const auto& key : requiredKeys)
-        {
-            if (!dict.Contains(key))
-            {
-                 LogicError("Required key '%ls' is not found in the dictionary "
-                            "(%ls).", key, GetModelVersionsString(currentModelVersion, version));
-            }
+            // On Windows, the type name contains "class" prefix. 
+            // Return the actual name, omitting the prefix.
+            return &name[6];
         }
-        return version;
-    }      
+        return name;
+    }
 }

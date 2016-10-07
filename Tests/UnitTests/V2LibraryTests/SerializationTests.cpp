@@ -174,7 +174,7 @@ void TestLearnerSerialization(int numParameters, const DeviceDescriptor& device)
     learner1->Update(gradientValues, 1);
 
     {
-        auto checkpoint = learner1->GetCheckpointState();
+        auto checkpoint = learner1->Serialize();
         fstream stream;
         OpenStream(stream, tempFilePath, false);
         stream << checkpoint;
@@ -201,11 +201,153 @@ void TestLearnerSerialization(int numParameters, const DeviceDescriptor& device)
     learner1->Update(gradientValues, 1);
     learner2->Update(gradientValues, 1);
 
-     auto checkpoint1 = learner1->GetCheckpointState();
-     auto checkpoint2 = learner2->GetCheckpointState();
+     auto checkpoint1 = learner1->Serialize();
+     auto checkpoint2 = learner2->Serialize();
     
     if (checkpoint1 != checkpoint2)
         throw std::runtime_error("TestLearnerSerialization: original and restored from a checkpoint learners diverge.");
+}
+
+
+void CheckEnumValuesNotModified() {
+    // During the model and checkpoint serialization, for all enum values we save corresponding 
+    // integer values. For this reason, we need to make sure that enum values never change 
+    // corresponding integer values (new enum values can only be appended to the end of the value
+    // list and never inserted in the middle). 
+
+    // The following list of asserts is APPEND ONLY. DO NOT CHANGE existing assert statements.
+
+    
+    static_assert(static_cast<size_t>(DataType::Unknown) == 0 &&
+                  static_cast<size_t>(DataType::Float) == 1 &&
+                  static_cast<size_t>(DataType::Double) == 2, 
+                  "DataType enum value was modified.");
+
+    static_assert(static_cast<size_t>(VariableKind::Input) == 0 &&
+                  static_cast<size_t>(VariableKind::Output) == 1 &&
+                  static_cast<size_t>(VariableKind::Parameter) == 2 &&
+                  static_cast<size_t>(VariableKind::Constant) == 3 &&
+                  static_cast<size_t>(VariableKind::Placeholder) == 4, 
+                  "VariableKind enum value was modified.");
+
+    
+    static_assert(static_cast<size_t>(PrimitiveOpType::Negate) == 0 &&
+                  static_cast<size_t>(PrimitiveOpType::Sigmoid) == 1 &&
+                  static_cast<size_t>(PrimitiveOpType::Tanh) == 2 &&
+                  static_cast<size_t>(PrimitiveOpType::ReLU) == 3 &&
+                  static_cast<size_t>(PrimitiveOpType::Exp) == 4 &&
+                  static_cast<size_t>(PrimitiveOpType::Log) == 5 &&
+                  static_cast<size_t>(PrimitiveOpType::Sqrt) == 6 &&
+                  static_cast<size_t>(PrimitiveOpType::Floor) == 7 &&
+                  static_cast<size_t>(PrimitiveOpType::Abs) == 8 &&
+                  static_cast<size_t>(PrimitiveOpType::Reciprocal) == 9 &&
+                  static_cast<size_t>(PrimitiveOpType::Softmax) == 10 &&
+                  static_cast<size_t>(PrimitiveOpType::Hardmax) == 11 &&
+                  static_cast<size_t>(PrimitiveOpType::TransposeAxes) == 12 &&
+                  static_cast<size_t>(PrimitiveOpType::Where) == 13 &&
+                  static_cast<size_t>(PrimitiveOpType::Slice) == 14 &&
+                  static_cast<size_t>(PrimitiveOpType::Dropout) == 15 &&
+                  static_cast<size_t>(PrimitiveOpType::Reshape) == 16 &&
+                  static_cast<size_t>(PrimitiveOpType::Pooling) == 17 &&
+                  static_cast<size_t>(PrimitiveOpType::SumAll) == 18 &&
+                  static_cast<size_t>(PrimitiveOpType::Plus) == 19  &&
+                  static_cast<size_t>(PrimitiveOpType::Minus) == 20 &&
+                  static_cast<size_t>(PrimitiveOpType::ElementTimes) == 21 &&
+                  static_cast<size_t>(PrimitiveOpType::Equal) == 22 &&
+                  static_cast<size_t>(PrimitiveOpType::NotEqual) == 23 &&
+                  static_cast<size_t>(PrimitiveOpType::Less) == 24 &&
+                  static_cast<size_t>(PrimitiveOpType::LessEqual) == 25 &&
+                  static_cast<size_t>(PrimitiveOpType::Greater) == 26 &&
+                  static_cast<size_t>(PrimitiveOpType::GreaterEqual) == 27 &&
+                  static_cast<size_t>(PrimitiveOpType::PackedIndex) == 28 &&
+                  static_cast<size_t>(PrimitiveOpType::GatherPacked) == 29 &&
+                  static_cast<size_t>(PrimitiveOpType::ScatterPacked) == 30 &&
+                  static_cast<size_t>(PrimitiveOpType::Times) == 31 &&
+                  static_cast<size_t>(PrimitiveOpType::TransposeTimes) == 32 &&
+                  static_cast<size_t>(PrimitiveOpType::Convolution) == 33 &&
+                  static_cast<size_t>(PrimitiveOpType::SquaredError) == 34 &&
+                  static_cast<size_t>(PrimitiveOpType::CrossEntropyWithSoftmax) == 35 &&
+                  static_cast<size_t>(PrimitiveOpType::ClassificationError) == 36 &&
+                  static_cast<size_t>(PrimitiveOpType::PastValue) == 37 &&
+                  static_cast<size_t>(PrimitiveOpType::FutureValue) == 38 &&
+                  static_cast<size_t>(PrimitiveOpType::ReduceElements) == 39 &&
+                  static_cast<size_t>(PrimitiveOpType::BatchNormalization) == 40 &&
+                  static_cast<size_t>(PrimitiveOpType::Clip) == 41 &&
+                  static_cast<size_t>(PrimitiveOpType::Select) == 42 &&
+                  static_cast<size_t>(PrimitiveOpType::Splice) == 43 &&
+                  static_cast<size_t>(PrimitiveOpType::Combine) == 44, 
+                  "PrimitiveOpType enum value was modified.");
+}
+
+
+static Trainer BuildTrainer(const FunctionPtr& function, const Variable& labels, const LearningRatesPerSample& learningRateSchedule)
+{
+    auto trainingLoss = CNTK::CrossEntropyWithSoftmax(function, labels, L"lossFunction");
+    auto prediction = CNTK::ClassificationError(function, labels, L"classificationError");
+    auto learner = SGDLearner(function->Parameters(), learningRateSchedule);
+   return Trainer(function, trainingLoss, prediction, { learner });
+}
+
+void TestModelSerialization(const DeviceDescriptor& device)
+{
+    const size_t inputDim = 2000;
+    const size_t cellDim = 25;
+    const size_t hiddenDim = 25;
+    const size_t embeddingDim = 50;
+    const size_t numOutputClasses = 5;
+
+    auto features = InputVariable({ inputDim }, true /*isSparse*/, DataType::Float, L"features");
+    auto classifierOutput = LSTMSequenceClassiferNet(features, numOutputClasses, embeddingDim, hiddenDim, cellDim, device, L"classifierOutput");
+
+    auto labels = InputVariable({ numOutputClasses }, DataType::Float, L"labels", { Axis::DefaultBatchAxis() });
+
+    auto minibatchSource = TextFormatMinibatchSource(L"Train.ctf", { { L"features", inputDim, true, L"x" }, { L"labels", numOutputClasses, false, L"y" } }, 0);
+    auto featureStreamInfo = minibatchSource->StreamInfo(features);
+    auto labelStreamInfo = minibatchSource->StreamInfo(labels);
+
+    const size_t minibatchSize = 200;
+    auto minibatchData = minibatchSource->GetNextMinibatch(minibatchSize, device);
+    auto actualMBSize = minibatchData[labelStreamInfo].m_numSamples;
+
+    LearningRatesPerSample learningRateSchedule({ { 2, 0.0005 }, { 2, 0.00025 } }, actualMBSize);
+
+    Trainer trainer = BuildTrainer(classifierOutput, labels, learningRateSchedule);
+
+    trainer.TrainMinibatch({ { features, minibatchData[featureStreamInfo].m_data }, { labels, minibatchData[labelStreamInfo].m_data } }, device);
+
+
+    for (int i = 0; i < 3; ++i)
+    {
+        Dictionary model = Function::Save(classifierOutput);
+
+        auto classifierOutputReloaded = Function::Load(model, device);
+
+        std::unordered_map<Variable, Variable> replacements;
+        const auto& inputs = classifierOutputReloaded->Inputs();
+        for (const auto& input : inputs)
+        {
+            if (input.IsPlaceholder() && input.Uid() == features.Uid())
+            {
+                replacements[input] = features;
+            }
+        }
+
+        classifierOutputReloaded->ReplacePlaceholders(replacements);
+
+        Trainer trainerReloaded = BuildTrainer(classifierOutputReloaded, labels, learningRateSchedule);
+
+        for (int j = 0; j < 2; ++j)
+        {
+            trainer.TrainMinibatch({ { features, minibatchData[featureStreamInfo].m_data }, { labels, minibatchData[labelStreamInfo].m_data } }, device);
+            trainerReloaded.TrainMinibatch({ { features, minibatchData[featureStreamInfo].m_data }, { labels, minibatchData[labelStreamInfo].m_data } }, device);
+
+            double mbLoss1 = trainer.PreviousMinibatchLossAverage();
+            double mbLoss2 = trainerReloaded.PreviousMinibatchLossAverage();
+
+            if (mbLoss1 != mbLoss2)
+                throw std::runtime_error("Post checkpoint restoration training loss does not match expectation");
+        }
+    }
 }
 
 void SerializationTests()
@@ -217,8 +359,13 @@ void SerializationTests()
     TestLearnerSerialization<float>(5, DeviceDescriptor::CPUDevice());
     TestLearnerSerialization<double>(10, DeviceDescriptor::CPUDevice());
 
+    TestModelSerialization(DeviceDescriptor::GPUDevice(0));
+    TestModelSerialization(DeviceDescriptor::CPUDevice());
+
 #ifndef CPUONLY
     TestLearnerSerialization<float>(5, DeviceDescriptor::GPUDevice(0));
     TestLearnerSerialization<double>(10, DeviceDescriptor::GPUDevice(0));;
+    TestModelSerialization(DeviceDescriptor::GPUDevice(0));
 #endif
+    
 }

@@ -296,3 +296,23 @@ inline void PrintTrainingProgress(const CNTK::Trainer& trainer, size_t minibatch
         printf("Minibatch %d: CrossEntropy loss = %.8g, Evaluation criterion = %.8g\n", (int)minibatchIdx, trainLossValue, evaluationValue);
     }
 }
+
+
+inline CNTK::FunctionPtr Embedding(const CNTK::Variable& input, size_t embeddingDim, const CNTK::DeviceDescriptor& device)
+{
+    assert(input.Shape().Rank() == 1);
+    size_t inputDim = input.Shape()[0];
+
+    auto embeddingParameters = CNTK::Parameter(CNTK::NDArrayView::RandomUniform<float>({ embeddingDim, inputDim }, -0.05, 0.05, 1, device));
+    return Times(embeddingParameters, input);
+}
+
+inline CNTK::FunctionPtr LSTMSequenceClassiferNet(const CNTK::Variable& input, size_t numOutputClasses, size_t embeddingDim, size_t LSTMDim, size_t cellDim, const CNTK::DeviceDescriptor& device, const std::wstring& outputName)
+{
+    auto embeddingFunction = Embedding(input, embeddingDim, device);
+    auto pastValueRecurrenceHook = [](const CNTK::Variable& x) { return PastValue(x); };
+    auto LSTMFunction = LSTMPComponentWithSelfStabilization<float>(embeddingFunction, { LSTMDim }, { cellDim }, pastValueRecurrenceHook, pastValueRecurrenceHook, device).first;
+    auto thoughtVectorFunction = CNTK::Sequence::Last(LSTMFunction);
+
+    return FullyConnectedLinearLayer(thoughtVectorFunction, numOutputClasses, device, outputName);
+}

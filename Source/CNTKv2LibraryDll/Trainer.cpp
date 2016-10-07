@@ -180,7 +180,7 @@ namespace CNTK
         if (m_parameterLearners.size() > 1)
             LogicError("Trainer::SaveCheckpoint: Checkpointing is currently unsupported for multiple learners");
 
-        auto learnerState = (*(m_parameterLearners.begin()))->GetCheckpointState();
+        auto learnerState = (*(m_parameterLearners.begin()))->Serialize();
         std::wstring trainerStateCheckpointFilePath = GetTrainerStateCheckpointFilePath(modelFilePath);
         auto ckpStream = GetFstream(trainerStateCheckpointFilePath, false);
         *ckpStream << learnerState;

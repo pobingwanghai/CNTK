@@ -29,7 +29,9 @@ namespace CNTK
     public:
         virtual bool Update(const std::unordered_map<Parameter, NDArrayViewPtr>& gradientValues, size_t trainingSampleCount) override final;
 
-        virtual Dictionary GetCheckpointState() const override final;
+        virtual Dictionary Serialize() const override final;
+
+        virtual size_t CurrentVersion() const override final { return s_checkpointVersion; }
 
         virtual void RestoreFromCheckpoint(const Dictionary& checkpoint) override final;
 
@@ -97,7 +99,7 @@ namespace CNTK
         static bool HasNan(const NDArrayViewPtr& value, const char* name);
         static void Print(const NDArrayViewPtr& value, const char* msg);
 
-        static const size_t checkpointVersion = 1;
+        static const size_t s_checkpointVersion = 1;
     };
 
     // Vanilla gradient descent optimization algorithm.

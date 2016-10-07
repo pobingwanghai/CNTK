@@ -12,58 +12,6 @@
 #include "Utils.h"
 #include "ConvolveGeometry.h"
 
-namespace CNTK
-{
-    enum class PrimitiveOpType : unsigned int
-    {
-        Negate,
-        Sigmoid,
-        Tanh,
-        ReLU,
-        Exp,
-        Log,
-        Sqrt,
-        Floor,
-        Abs,
-        Reciprocal,
-        Softmax,
-        Hardmax,
-        TransposeAxes,
-        Where,
-        Slice,
-        Dropout,
-        Reshape,
-        Pooling,
-        SumAll,
-        Plus,
-        Minus,
-        ElementTimes,
-        Equal,
-        NotEqual,
-        Less,
-        LessEqual,
-        Greater,
-        GreaterEqual,
-        PackedIndex,
-        GatherPacked,
-        ScatterPacked,
-        Times,
-        TransposeTimes,
-        Convolution,
-        SquaredError,
-        CrossEntropyWithSoftmax,
-        ClassificationError,
-        PastValue,
-        FutureValue,
-        ReduceElements,
-        BatchNormalization,
-        Clip,
-        Select,
-        Splice,
-        Combine,
-    };
-}
-
 namespace std
 {
     template <> struct hash<CNTK::PrimitiveOpType>
@@ -239,9 +187,13 @@ namespace CNTK
             NOT_IMPLEMENTED;
         }
 
-        virtual Dictionary Save() const override;
+        virtual Dictionary Serialize() const override;
 
-        static FunctionPtr Load(const Dictionary& dictionary, const std::unordered_map<std::wstring, Variable>& uidToVariableMap);
+        virtual size_t CurrentVersion() const override { return s_modelVersion; }
+
+        static FunctionPtr Load(const Dictionary& dictionary, 
+                                const std::unordered_map<std::wstring, Variable>& uidToVariableMap, 
+                                const CNTK::DeviceDescriptor& device);
 
     public:
         PrimitiveOpType OpType() const
@@ -251,8 +203,8 @@ namespace CNTK
 
     private:
 
-         PrimitiveFunction(PrimitiveOpType op, const std::vector<Variable>& inputs, Dictionary&& functionConfig, const std::wstring& functionName, const std::wstring uid)
-            : Function(inputs, GetOutputVariables(op, inputs, this, functionConfig), std::move(functionConfig), functionName), m_op(op)
+         PrimitiveFunction(PrimitiveOpType op, const std::vector<Variable>& inputs, Dictionary&& functionConfig, const std::wstring& functionName, const std::wstring& uid)
+            : Function(inputs, GetOutputVariables(op, inputs, this, functionConfig), std::move(functionConfig), functionName, uid), m_op(op)
         {
         }
 
@@ -447,7 +399,7 @@ namespace CNTK
 
     private:
         PrimitiveOpType m_op;
-        static const size_t modelVersion = 1;
+        static const size_t s_modelVersion = 1;
     };
 
     class CNTKBackPropState final : public BackPropState
@@ -501,8 +453,8 @@ namespace CNTK
         {
             std::unordered_set<FunctionPtr> visitedFunctions;
 
-            // Call DetermineInputs to get the set of all functions in the graph
-            DetermineInputs(rootFunction, visitedFunctions);
+            // Call Collect to get the set of all functions in the graph
+            Collect(rootFunction, visitedFunctions);
 
             return MakeSharedObject<CompositeFunction>(rootFunction, std::move(visitedFunctions), name);
         }
@@ -516,9 +468,11 @@ namespace CNTK
                               const std::unordered_map<Variable, ValuePtr>& rootGradientValues,
                               std::unordered_map<Variable, ValuePtr>& backPropagatedGradientValuesForInputs) override;
 
-        virtual Dictionary Save() const override;
+        virtual Dictionary Serialize() const override;
 
-        static FunctionPtr Load(const Dictionary& dictionary);
+        virtual size_t CurrentVersion() const override { return s_modelVersion; }
+
+        static FunctionPtr Load(const Dictionary& dictionary, const CNTK::DeviceDescriptor& device);
 
     public:
         bool NetworkMatricesAllocated() const 
@@ -542,55 +496,59 @@ namespace CNTK
         {}
 
         template <typename FunctionType>
-		void Traverse(FunctionType&& func) const
-		{
-			std::unordered_set<FunctionPtr> visitedFunctions;
-			Traverse(RootFunction(), visitedFunctions, func);
-		}
+        void Traverse(FunctionType&& func) const
+        {
+            const auto& root = RootFunction();
+            std::unordered_set<FunctionPtr> visitedFunctions;
+            Traverse(root, visitedFunctions, func);
+        }
 
-		// Recursively traverses the Function graph underlying the 'rootFunction' invoking the provided func for all visited nodes in the graph.
-		template <typename FunctionType>
-		static void Traverse(const FunctionPtr& rootFunction, std::unordered_set<FunctionPtr>& visitedFunctions, FunctionType&& func)
-		{
-			visitedFunctions.insert(rootFunction);
-			func(rootFunction);
+        // Recursively traverses the Function graph underlying the 'rootFunction' invoking the provided func for all visited nodes in the graph.
+        template <typename FunctionType>
+        static void Traverse(const FunctionPtr& rootFunction, std::unordered_set<FunctionPtr>& visitedFunctions, FunctionType&& func)
+        {
+            visitedFunctions.insert(rootFunction);
+            func(rootFunction);
 
-			std::vector<Variable> rootFunctionInputs = rootFunction->Inputs();
-			for (auto rootInput : rootFunctionInputs)
-			{
-				if (rootInput.IsOutput() && visitedFunctions.find(rootInput.Owner()) == visitedFunctions.end())
-				{
-					FunctionPtr function = rootInput.Owner();
-					Traverse(rootInput.Owner(), visitedFunctions, func);
-				}
-			}
-		}
+            std::vector<Variable> rootFunctionInputs = rootFunction->Inputs();
+            for (const auto& rootInput : rootFunctionInputs)
+            {
+                if (rootInput.IsOutput() && visitedFunctions.find(rootInput.Owner()) == visitedFunctions.end())
+                {
+                    const auto& function = rootInput.Owner();
+                    Traverse(function, visitedFunctions, func);
+                }
+            }
+        }
 
         std::vector<Variable> DetermineInputs() const
         {
+            const auto& root = RootFunction();
             std::unordered_set<FunctionPtr> visitedFunctions;
-            return DetermineInputs(RootFunction(), visitedFunctions);
+            return DetermineInputs(root, visitedFunctions);
+        }
+
+         // Recursively traverses the Function graph and populates the provided set of functions.
+        static void Collect(const FunctionPtr& rootFunction, std::unordered_set<FunctionPtr>& functions)
+        {
+            // Call Traverse to get the set of all functions in the graph
+            Traverse(rootFunction, functions, [](const FunctionPtr& f){});
         }
 
         // Recursively traverses the Function graph underlying the 'rootFunction' to determine all the leaves (aka inputs) of the graph
         static std::vector<Variable> DetermineInputs(const FunctionPtr& rootFunction, std::unordered_set<FunctionPtr>& visitedFunctions)
         {
-            visitedFunctions.insert(rootFunction);
-
             std::vector<Variable> inputs;
-            std::vector<Variable> rootFunctionInputs = rootFunction->Inputs();
-            for (auto rootInput : rootFunctionInputs)
-            {
-                if (!rootInput.IsOutput())
-                    inputs.push_back(rootInput);
-                else if (visitedFunctions.find(rootInput.Owner()) == visitedFunctions.end())
-                {
-                    FunctionPtr function = rootInput.Owner();
-                    std::vector<Variable> functionInputs = DetermineInputs(function, visitedFunctions);
-                    std::copy(functionInputs.begin(), functionInputs.end(), std::back_inserter(inputs));
-                }
-            }
-
+            Traverse(rootFunction, visitedFunctions, [&inputs](const FunctionPtr& function) {
+                        std::vector<Variable> functionInputs = function->Inputs();
+                        for (const auto& input : functionInputs)
+                        {
+                            if (!input.IsOutput())
+                            {
+                                inputs.push_back(input);
+                            }
+                        }
+                    });
             return inputs;
         }
 
@@ -659,7 +617,7 @@ namespace CNTK
 
         bool m_networkMatricesAllocated;
 
-        static const size_t modelVersion = 1;
+        static const size_t s_modelVersion = 1;
     };
 
     inline std::vector<CNTK::Axis> DynamicAxesFromInternalDynamicAxisName(const std::wstring& internalDynamicAxisName)

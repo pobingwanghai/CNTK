@@ -7,6 +7,7 @@
 #include "Learner.h"
 #include "TensorView.h"
 #include "Utils.h"
+#include "Serialization.h"
 
 #define UPDATE_FUNCTION                                                                                       \
     switch (smoothedGradientValue->GetDataType())                                                             \
@@ -262,23 +263,19 @@ namespace CNTK
 
     string LearnerBase::LearnerType() const
     {
-        auto name = typeid(*this).name(); 
-        if (strncmp(name, "class ", 6) == 0)
-        {
-            // On Windows, the type name contains "class" prefix. 
-            // Return the actual name, omitting the prefix.
-            return &name[6];
-        } 
-        return name;
+        return Typename(this);
     }
 
-    /*virtual*/ Dictionary LearnerBase::GetCheckpointState() const /*override*/
+    static const std::wstring s_learnerTypeValue = L"Learner";
+
+    /*virtual*/ Dictionary LearnerBase::Serialize() const /*override*/
     {
         Dictionary checkpoint;
 
-        checkpoint[L"checkpointVersion"] = checkpointVersion;
-        checkpoint[L"sampleCount"] = m_sampleCount;
-        checkpoint[L"minibatchCount"] = m_minibatchCount;
+        checkpoint[versionKey] = CurrentVersion();
+        checkpoint[typeKey] = s_learnerTypeValue;
+        checkpoint[sampleCountKey] = m_sampleCount;
+        checkpoint[minibatchCountKey] = m_minibatchCount;
 
         // TODO: should we also save learning rate schedule into the checkpoint?
         // If that is the case, need to be able to override this method in subclasses
@@ -299,15 +296,14 @@ namespace CNTK
 
     /*virtual*/ void LearnerBase::RestoreFromCheckpoint(const Dictionary& checkpoint) /*override*/
     {
-        m_sampleCount = checkpoint[L"sampleCount"].Value<size_t>();
-        m_minibatchCount = checkpoint[L"minibatchCount"].Value<size_t>();
+        static const vector<std::wstring> s_requiredDictionaryKeys = { typeKey, sampleCountKey, minibatchCountKey };
+        
+        ValidateDictionary<LearnerBase>(checkpoint, s_requiredDictionaryKeys, CurrentVersion());
 
-        size_t version = checkpoint[L"checkpointVersion"].Value<size_t>();
-        if (checkpointVersion != version)
-        {
-            // At the moment, we only support one version, so this should never happen.
-            LogicError("Unsupported checkpoint version.");
-        }
+        ValidateType<LearnerBase>(checkpoint, s_learnerTypeValue, CurrentVersion());
+
+        m_sampleCount = checkpoint[sampleCountKey].Value<size_t>();
+        m_minibatchCount = checkpoint[minibatchCountKey].Value<size_t>();
 
         for (const auto& parameter : Parameters())
         {
