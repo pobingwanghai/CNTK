@@ -455,8 +455,22 @@ CNTK2 = [
     // 11. Criterion nodes
     // No changes here - we said the default input would be the label sequence here, against which the 
     // empirical sequence is compared to. Keeping this for now.
-    CrossEntropyWithSoftmax(_, outProbVectorSequence, tag='') = new ComputationNode [ operation = 'CrossEntropyWithSoftmax' ; inputs = _AsNodes (_ : outProbVectorSequence) /*plus the function args*/ ]
-    ClassificationError(_, outVectorSequence, topN=1, tag='') = new ComputationNode [ operation = 'ClassificationError' ; inputs = _AsNodes (if topN == 1 then (_ : outVectorSequence) else  (_ : outVectorSequence : Constant (topN))) /*plus the function args*/ ]
+    CrossEntropyWithSoftmax(labelSequence, outProbVectorSequence, axis=0, tag='') = 
+        if axis==0 then new ComputationNode [ operation = 'CrossEntropyWithSoftmax' ; inputs = _AsNodes (labelSequence : outProbVectorSequence) /*plus the function args*/ ]
+        else [ tag1 = tag; out = Minus (ReduceLogSum (outProbVectorSequence, axis=axis), ReduceSum (labelSequence .* outProbVectorSequence, axis=axis), tag=tag1) ].out
+    # Classification error along a specific axis: account only for missed labels, i.e.
+    # strictly check whether at the one “1” location in labels we find a value equal to the max
+    ClassificationError(labelSequence, outVectorSequence, topN=1, axis=0, tag='') =
+        if axis==0 then new ComputationNode [ operation = 'ClassificationError' ; inputs = _AsNodes (if topN == 1 then (labelSequence : outVectorSequence) else  (labelSequence : outVectorSequence : Constant (topN))) /*plus the function args*/ ]
+        else if topN != 1 then Fail ("ClassificationError() along a specific axis does not support topN.")
+        else {
+            axMax     = ReduceMax (outVectorSequence, axis=axis)    # max value along competition axis
+            pred      = outVectorSequence == axMax                  # 1 for all values that are max
+            wrongPred = labelSequence != pred                       # look up all wrong predictions {label index}
+            axErr     = ReduceSum (wrongPred, axis=axis)            # sum up wrong predictions  along competition axis
+            capErr    = axErr >= 1                                  # only count maximally one error per prediction
+            err       = ReduceMean (capErr, tag=tag)                # average into a single number per sample
+        }.err
     ErrorPrediction = ClassificationError  # legacy
     # TODO: replace with this (need to deal with topN thing):
     # (_new will be removed once the change is made)
@@ -547,6 +561,7 @@ MaxUnpooling(unpoolInput, poolInput, kernelDims, stride=1, autoPadding = true, l
 # 2D pooling
 MaxPooling(input, windowWidth, windowHeight, horizontalSubsample, verticalSubsample, imageLayout='CHW', tag='') = new ComputationNode [ operation = 'MaxPooling' ; inputs = _AsNodes (input) /*plus the function args*/ ]
 AveragePooling(input, windowWidth, windowHeight, horizontalSubsample, verticalSubsample, imageLayout='CHW', tag='') = new ComputationNode [ operation = 'AveragePooling' ; inputs = _AsNodes (input) /*plus the function args*/ ]
+ROIPooling (input, ROIs, shape) = new ComputationNode { operation = 'ROIPooling' ; inputs = _AsNodes (input : ROIs) ; outputShape = new TensorShape [ dims = shape ] ; tag='' /*plus the function args*/ } 
 ColumnwiseCrossProduct = KhatriRaoProduct // deprecated 
 ErrorPrediction = ClassificationError   # legacy name
 Delay = PastValue 
@@ -560,8 +575,6 @@ CosDistance(aVectorSequence, anotherVectorSequence, tag='') = new ComputationNod
 CosDistanceWithNegativeSamples(aVectorSequence, anotherVectorSequence, numShifts, numNegSamples, tag='') = new ComputationNode [ operation = 'CosDistanceWithNegativeSamples' ; inputs = _AsNodes (aVectorSequence : anotherVectorSequence : numShifts : numNegSamples) /*plus the function args*/ ]
 Cosine(x, tag='') = new ComputationNode [ operation = 'Cosine' ; inputs = _AsNodes (x) /*plus the function args*/ ]
 CrossEntropy(refProbVectorSequence, outProbVectorSequence, tag='') = new ComputationNode [ operation = 'CrossEntropy' ; inputs = _AsNodes (refProbVectorSequence : outProbVectorSequence) /*plus the function args*/ ]
-# once ReduceLogSum becomes proper C++, CrossEntropyWithSoftmax() will become this:
-NewCrossEntropyWithSoftmax (labelSequence, z, tag='') = [ tag1 = tag; out = Minus (ReduceLogSum (z), ReduceSum (labelSequence .* z), tag=tag1) ].out
 DiagTimes(diagonalMatrixAsColumnVector, matrix, tag='') = new ComputationNode [ operation = 'DiagTimes' ; inputs = _AsNodes (diagonalMatrixAsColumnVector : matrix) /*plus the function args*/ ]
 // TODO: DiagTimes = ElementTimes
 GatherPacked(indexSequence, sourceData, tag='') = new ComputationNode [ operation = 'GatherPacked' ; inputs = _AsNodes (indexSequence : sourceData) /*plus the function args*/ ]
@@ -575,7 +588,7 @@ MatrixL1Reg(matrix, tag='') = new ComputationNode [ operation = 'MatrixL1Reg' ; 
 MatrixL2Reg(matrix, tag='') = new ComputationNode [ operation = 'MatrixL2Reg' ; inputs = _AsNodes (matrix) /*plus the function args*/ ]
 Mean(dataVectorSequence, tag='') = new ComputationNode [ operation = 'Mean' ; inputs = _AsNodes (dataVectorSequence) /*plus the function args*/ ]
 Negate(input, tag='') = new ComputationNode [ operation = 'Negate' ; inputs = _AsNodes (input) /*plus the function args*/ ]
-PackedIndex(targetObject, indexSequence, tag='') = new ComputationNode [ operation = 'PackedIndex' ; inputs = _AsNodes (targetObject : indexSequence) /*plus the function args*/ ]
+PackedIndex(nodeWithLayoutToPackFor, indexSequence, tag='') = new ComputationNode [ operation = 'PackedIndex' ; inputs = _AsNodes (nodeWithLayoutToPackFor : indexSequence) /*plus the function args*/ ]
 PerDimMeanVarDeNormalization(dataVectorSequence, meanVector, invStdDevVector, tag='') = new ComputationNode [ operation = 'PerDimMeanVarDeNormalization' ; inputs = _AsNodes (dataVectorSequence : meanVector : invStdDevVector) /*plus the function args*/ ]
 #PerDimMeanVarNormalization(dataVectorSequence, meanVector, invStdDevVector, tag='') = new ComputationNode [ operation = 'PerDimMeanVarNormalization' ; inputs = _AsNodes (dataVectorSequence : meanVector : invStdDevVector) /*plus the function args*/ ]
 PerDimMeanVarNormalization (x, mean, invStdDev) = (x - mean) .* invStdDev
@@ -802,8 +815,8 @@ Sequences = [
 
     # Gather and Scatter
     # We go through 3 nodes each to take advantage of x
-    Gather  (cond, x) =  GatherPacked (      PackedIndex (x, Where (cond)), x) # 'cond' matches 'x'
-    Scatter (cond, y) = ScatterPacked (cond, PackedIndex (y, Where (cond)), y) # 'cond' matches the result
+    Gather  (cond, x) =  GatherPacked (      PackedIndex (/*layout of*/ x, Where (cond)), x)                  # 'cond' matches 'x'
+    Scatter (cond, y) = ScatterPacked (/*layout of*/ cond, PackedIndex (/*layout of*/ cond, Where (cond)), y) # 'cond' matches the result
 
     # sequence-altering LINQ-like operators
     # These generate new data packing (MBLayouts)

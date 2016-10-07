@@ -36,8 +36,11 @@ namespace CNTK
 
         if (node->IsLeaf())
         {
+            std::wstring varUid, varName;
             if (node->Is<InputValueBase<ElementType>>())
             {
+                std::tie(varUid, varName) = UidAndNameFromCNTKInternalNodeName(node->NodeName(), VariableKind::Input);
+
                 bool isSparse = node->Is<SparseInputValue<ElementType>>();
                 if (node->HasMBLayout())
                 {
@@ -45,12 +48,12 @@ namespace CNTK
                     auto inputNodeInternalDynamicAxisName = node->GetMBLayout()->GetAxisName();
                     std::vector<Axis> inputVarDynamicAxes = DynamicAxesFromInternalDynamicAxisName(inputNodeInternalDynamicAxisName);
 
-                    var = Variable(varShape, isSparse, AsDataType<ElementType>(), node->GetLearningRateMultiplier() != 0, node->NodeName(), inputVarDynamicAxes, node->NodeName());
+                    var = Variable(varShape, isSparse, AsDataType<ElementType>(), node->GetLearningRateMultiplier() != 0, varName, inputVarDynamicAxes, varUid);
                 }
                 else
                 {
                     // TODO: Allow creating inputs without a dynamic axis
-                    LogicError("Found InputNode with no dynamic axis which is currently unsupported");
+                    LogicError("Found InputNode with no dynamic axes which is currently unsupported");
                 }
             }
             else if (node->Is<LearnableParameter<ElementType>>())
@@ -60,9 +63,15 @@ namespace CNTK
                 auto tensorView = new TensorView<ElementType>(std::make_shared<Matrix<ElementType>>(matrix.AsReference()), AsTensorViewShape(node->GetSampleLayout()));
                 NDArrayViewPtr value = MakeSharedObject<NDArrayView>(AsDataType<ElementType>(), AsDeviceDescriptor(matrix.GetDeviceId()), AsStorageFormat(matrix.GetFormat()), varShape, false, tensorView);
                 if (isConstant)
-                    var = Constant(value, node->NodeName(), node->NodeName());
+                {
+                    std::tie(varUid, varName) = UidAndNameFromCNTKInternalNodeName(node->NodeName(), VariableKind::Constant);
+                    var = Constant(value, varName, varUid);
+                }
                 else
-                    var = Parameter(value, node->NodeName(), node->NodeName());
+                {
+                    std::tie(varUid, varName) = UidAndNameFromCNTKInternalNodeName(node->NodeName(), VariableKind::Parameter);
+                    var = Parameter(value, varName, varUid);
+                }
             }
             else
                 LogicError("CNTK::LoadLegacyModel: Unsupported legacy CNTK node named '%S'", node->NodeName().c_str());
@@ -195,8 +204,6 @@ namespace CNTK
                     auto initialStateVar = Constant::Scalar(node->As<PastValueNode<ElementType>>()->InitialActivationValue(), AsDeviceDescriptor(node->GetDeviceId()));
                     inputVars.push_back(initialStateVar);
                 }
-                else
-                    LogicError("LoadLegacyModel: Currently loading models with non-scalar initial value for PastValueNode/FutureValueNode is unsupported");
 
                 primitiveFunctionConfigParameters[PrimitiveFunction::AttributeNameOffset] = (size_t)node->As<PastValueNode<ElementType>>()->TimeStep();
                 opType = PrimitiveOpType::PastValue;
@@ -208,8 +215,6 @@ namespace CNTK
                     auto initialStateVar = Constant::Scalar(node->As<FutureValueNode<ElementType>>()->InitialActivationValue(), AsDeviceDescriptor(node->GetDeviceId()));
                     inputVars.push_back(initialStateVar);
                 }
-                else
-                    LogicError("LoadLegacyModel: Currently loading models with non-scalar initial value for PastValueNode/FutureValueNode is unsupported");
 
                 primitiveFunctionConfigParameters[PrimitiveFunction::AttributeNameOffset] = (size_t)node->As<FutureValueNode<ElementType>>()->TimeStep();
                 opType = PrimitiveOpType::FutureValue;
@@ -354,8 +359,5 @@ namespace CNTK
         }
 
         computationNetwork->Save(modelFile);
-
-        if (!compositeFunction->NetworkMatricesAllocated())
-            compositeFunction->PurgeComputationNetwork();
     }
 }

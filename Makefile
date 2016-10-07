@@ -261,6 +261,7 @@ READER_SRC =\
 	$(SOURCEDIR)/Readers/ReaderLib/TruncatedBpttPacker.cpp \
 	$(SOURCEDIR)/Readers/ReaderLib/PackerBase.cpp \
 	$(SOURCEDIR)/Readers/ReaderLib/FramePacker.cpp \
+	$(SOURCEDIR)/Readers/ReaderLib/ReaderBase.cpp \
     $(SOURCEDIR)/Readers/ReaderLib/ChunkCache.cpp \
 
 COMMON_SRC =\
@@ -273,6 +274,7 @@ COMMON_SRC =\
 	$(SOURCEDIR)/Common/File.cpp \
 	$(SOURCEDIR)/Common/TimerUtility.cpp \
 	$(SOURCEDIR)/Common/fileutil.cpp \
+	$(SOURCEDIR)/Common/Sequences.cpp \
 
 MATH_SRC =\
 	$(SOURCEDIR)/Math/BatchNormalizationEngine.cpp \
@@ -286,6 +288,7 @@ MATH_SRC =\
 	$(SOURCEDIR)/Math/MatrixQuantizerCPU.cpp \
 	$(SOURCEDIR)/Math/Matrix.cpp \
 	$(SOURCEDIR)/Math/QuantizedMatrix.cpp \
+	$(SOURCEDIR)/Math/DataTransferer.cpp \
 	$(SOURCEDIR)/Math/RNGHandle.cpp \
 	$(SOURCEDIR)/Math/TensorView.cpp \
 
@@ -420,6 +423,9 @@ CNTKLIBRARY_TESTS_SRC =\
 	Tests/UnitTests/V2LibraryTests/FunctionTests.cpp \
 	Tests/UnitTests/V2LibraryTests/SequenceClassification.cpp \
 	Tests/UnitTests/V2LibraryTests/Seq2Seq.cpp \
+	Tests/UnitTests/V2LibraryTests/TruncatedLSTMAcousticModel.cpp \
+	Tests/UnitTests/V2LibraryTests/DeviceSelectionTests.cpp \
+	Examples/Evaluation/CPPEvalV2Client/EvalMultithreads.cpp \
 
 CNTKLIBRARY_TESTS:=$(BINDIR)/v2librarytests
 CNTKLIBRARY_TESTS_OBJ := $(patsubst %.cu, $(OBJDIR)/%.o, $(patsubst %.cpp, $(OBJDIR)/%.o, $(CNTKLIBRARY_TESTS_SRC)))
@@ -728,8 +734,11 @@ IMAGE_READER_LIBS += -lopencv_core -lopencv_imgproc -lopencv_imgcodecs
 
 ifdef LIBZIP_PATH
   CPPFLAGS += -DUSE_ZIP
+  #both directories are needed for building libzip
+  INCLUDEPATH += $(LIBZIP_PATH)/include
   INCLUDEPATH += $(LIBZIP_PATH)/lib/libzip/include
   IMAGE_READER_LIBS += -lzip
+  LIBPATH += $(LIBZIP_PATH)/lib
 endif
 
 IMAGEREADER_SRC =\

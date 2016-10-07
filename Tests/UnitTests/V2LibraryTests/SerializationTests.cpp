@@ -1,3 +1,7 @@
+//
+// Copyright (c) Microsoft. All rights reserved.
+// Licensed under the MIT license. See LICENSE.md file in the project root for full license information.
+//
 #include "CNTKLibrary.h"
 #include "Common.h"
 #include <string>
@@ -160,12 +164,12 @@ void TestLearnerSerialization(int numParameters, const DeviceDescriptor& device)
 
     NDShape shape = CreateShape(5, maxDimSize);
 
-    unordered_set<Parameter> parameters;
+    vector<Parameter> parameters;
     unordered_map<Parameter, NDArrayViewPtr> gradientValues;
     for (int i = 0; i < numParameters; i++)
     {
         Parameter parameter(NDArrayView::RandomUniform<ElementType>(shape, -0.5, 0.5, i, device), L"parameter_" + to_wstring(i));
-        parameters.insert(parameter);
+        parameters.push_back(parameter);
         gradientValues[parameter] = NDArrayView::RandomUniform<ElementType>(shape, -0.5, 0.5, numParameters + i, device);
     }
 
@@ -350,6 +354,61 @@ void TestModelSerialization(const DeviceDescriptor& device)
     }
 }
 
+void TestModelSaving(const DeviceDescriptor& device)
+{
+    const size_t inputDim = 2000;
+    const size_t cellDim = 25;
+    const size_t hiddenDim = 25;
+    const size_t embeddingDim = 50;
+    const size_t numOutputClasses = 5;
+
+    auto features = InputVariable({ inputDim }, true /*isSparse*/, DataType::Float, L"features");
+    auto classifierOutput = LSTMSequenceClassiferNet(features, numOutputClasses, embeddingDim, hiddenDim, cellDim, device, L"classifierOutput");
+
+    auto labels = InputVariable({ numOutputClasses }, DataType::Float, L"labels", { Axis::DefaultBatchAxis() });
+    auto trainingLoss = CNTK::CrossEntropyWithSoftmax(classifierOutput, labels, L"lossFunction");
+    auto prediction = CNTK::ClassificationError(classifierOutput, labels, L"classificationError");
+
+    auto minibatchSource = TextFormatMinibatchSource(L"Train.ctf", { { L"features", inputDim, true, L"x" }, { L"labels", numOutputClasses, false, L"y" } }, 0);
+    auto featureStreamInfo = minibatchSource->StreamInfo(features);
+    auto labelStreamInfo = minibatchSource->StreamInfo(labels);
+
+    const size_t minibatchSize = 200;
+    auto minibatchData = minibatchSource->GetNextMinibatch(minibatchSize, device);
+    auto actualMBSize = minibatchData[labelStreamInfo].m_numSamples;
+
+    LearningRatesPerSample learningRateSchedule({ { 2, 0.0005 }, { 2, 0.00025 } }, actualMBSize);
+    auto learner = SGDLearner(classifierOutput->Parameters(), learningRateSchedule);
+    Trainer trainer(classifierOutput, trainingLoss, prediction, { learner });
+
+    trainer.TrainMinibatch({ { features, minibatchData[featureStreamInfo].m_data }, { labels, minibatchData[labelStreamInfo].m_data } }, device);
+
+    const wchar_t* modelFile = L"seq2seq.model";
+    SaveAsLegacyModel(classifierOutput, modelFile);
+
+    trainer.TrainMinibatch({ { features, minibatchData[featureStreamInfo].m_data }, { labels, minibatchData[labelStreamInfo].m_data } }, device);
+    auto MB2Loss = trainer.PreviousMinibatchLossAverage();
+    trainer.TrainMinibatch({ { features, minibatchData[featureStreamInfo].m_data }, { labels, minibatchData[labelStreamInfo].m_data } }, device);
+
+    classifierOutput->RestoreFromLegacyModel(modelFile);
+
+    trainer.TrainMinibatch({ { features, minibatchData[featureStreamInfo].m_data }, { labels, minibatchData[labelStreamInfo].m_data } }, device);
+    auto postRestoreMB2Loss = trainer.PreviousMinibatchLossAverage();
+    FloatingPointCompare(postRestoreMB2Loss, MB2Loss, "Post checkpoint restoration training loss does not match expectation");
+
+    classifierOutput->RestoreFromLegacyModel(modelFile);
+    SaveAsLegacyModel(classifierOutput, modelFile);
+
+    trainer.TrainMinibatch({ { features, minibatchData[featureStreamInfo].m_data }, { labels, minibatchData[labelStreamInfo].m_data } }, device);
+    trainer.TrainMinibatch({ { features, minibatchData[featureStreamInfo].m_data }, { labels, minibatchData[labelStreamInfo].m_data } }, device);
+
+    classifierOutput->RestoreFromLegacyModel(modelFile);
+
+    trainer.TrainMinibatch({ { features, minibatchData[featureStreamInfo].m_data }, { labels, minibatchData[labelStreamInfo].m_data } }, device);
+    postRestoreMB2Loss = trainer.PreviousMinibatchLossAverage();
+    FloatingPointCompare(postRestoreMB2Loss, MB2Loss, "Post checkpoint restoration training loss does not match expectation");
+}
+
 void SerializationTests()
 {
     TestDictionarySerialization(4);
@@ -366,6 +425,8 @@ void SerializationTests()
     TestLearnerSerialization<float>(5, DeviceDescriptor::GPUDevice(0));
     TestLearnerSerialization<double>(10, DeviceDescriptor::GPUDevice(0));;
     TestModelSerialization(DeviceDescriptor::GPUDevice(0));
+    TestModelSaving(DeviceDescriptor::GPUDevice(0));
 #endif
     
+    TestModelSaving(DeviceDescriptor::CPUDevice());
 }

@@ -17,6 +17,7 @@
 #include "NonlinearityNodes.h"
 #include "RecurrentNodes.h"
 #include "Serialization.h"
+#include "Value.h"
 
 using namespace Microsoft::MSR::CNTK;
 
@@ -35,7 +36,7 @@ namespace CNTK
 
         return std::shared_ptr<std::vector<Variable>>(new std::vector<Variable>(std::move(inputs)), [](std::vector<Variable>* ptr) { delete ptr; });
     }
-    
+
     Function::Function(const std::vector<Variable>& inputs, const std::vector<Variable>& outputs, Dictionary&& functionConfig, const FunctionPtr& rootFunction, const std::wstring& name, const std::wstring& uid)
         : m_rootFunction(rootFunction), m_name(name), m_uid(uid), m_attributes(std::move(functionConfig))
     {
@@ -118,7 +119,7 @@ namespace CNTK
             }
         }
 
-        auto outputsUsingNewInputs = PrimitiveFunction::GetOutputVariables(primitiveFunction->OpType(), m_inputs, this, primitiveFunction->Attributes());
+        auto outputsUsingNewInputs = PrimitiveFunction::GetOutputVariables(primitiveFunction->OpType(), m_inputs, this, primitiveFunction->Attributes(), primitiveFunction->Name());
         auto currentOutputs = Outputs();
         for (size_t i = 0; i < currentOutputs.size(); ++i)
         {
@@ -229,9 +230,18 @@ namespace CNTK
 
         return clonedFunction->Outputs()[outputVarIndex];
     }
+
+    FunctionPtr Function::ReplacePlaceholder(const Variable& placeholderReplacement)
+    {
+        auto placeholders = Placeholders();
+        if (placeholders.size() != 1)
+            InvalidArgument("Function::ReplacePlaceholders called with a single replacement variable but this Function has %d placeholders", (int)placeholders.size());
+
+        return ReplacePlaceholders({ { *(placeholders.begin()), placeholderReplacement } });
+    }
+
     FunctionPtr Function::ReplacePlaceholders(const std::unordered_map<Variable, Variable>& placeholderReplacements)
     {
-
         std::unordered_set<const Function*> visitedFunctions;
         std::unordered_set<Variable> replacedPlaceholders;
         ReplacePlaceholdersInPlace(placeholderReplacements, visitedFunctions, replacedPlaceholders);
@@ -455,26 +465,52 @@ namespace CNTK
     /*static*/ const std::wstring PrimitiveFunction::AttributeNameEndIndex = L"endIndex";
     /*static*/ const std::wstring PrimitiveFunction::AttributeNameReductionOpName = L"reductionOpName";
 
-    /*static*/ std::vector<Variable> PrimitiveFunction::GetOutputVariables(PrimitiveOpType op, const std::vector<Variable>& inputs, Function* owner, const Dictionary& functionConfig)
+    /*static*/ std::vector<Variable> PrimitiveFunction::GetOutputVariables(PrimitiveOpType op, const std::vector<Variable>& inputs, Function* owner, const Dictionary& functionConfig, const std::wstring& functionName)
     {
         if (op == PrimitiveOpType::Combine)
             return inputs;
 
-        // TODO: We are just using the primary operand's DataType as output node's DataType. Is this always correct?
+        // We use the first non-constant input operand's DataType as the output DataType
+        // In case there are no non-constant known DataTypes, we just pick the first known operand DataType
+        // Also, all the known DataTypes of operands should match except for constants where coercion is allowed
+        DataType firstKnownInputDataType = DataType::Unknown;
         DataType outputDataType = DataType::Unknown;
         NDShape outputShape;
         size_t i = 0;
-        while ((outputDataType == DataType::Unknown) && (i < inputs.size()))
-            outputDataType = inputs[i++].GetDataType();
+        while (i < inputs.size())
+        {
+            auto input = inputs[i++];
+            auto inputDataType = input.GetDataType();
+            if (inputDataType != DataType::Unknown)
+            {
+                if (firstKnownInputDataType == DataType::Unknown)
+                    firstKnownInputDataType = inputDataType;
+
+                if (outputDataType == DataType::Unknown)
+                {
+                    if (!input.IsConstant())
+                        outputDataType = inputDataType;
+                }
+                else
+                {
+                    // The DataType of all operands should match except for Constants where we allow coercion
+                    if ((inputDataType != DataType::Unknown) && (inputDataType != outputDataType) && !input.IsConstant())
+                        InvalidArgument("Primitive function with op type %S has operands with different DataTypes %s and %s", PrimitiveOpTypeName(op).c_str(), DataTypeName(outputDataType), DataTypeName(inputDataType));
+                }
+            }
+        }
 
         if (outputDataType == DataType::Unknown)
-            InvalidArgument("The DataType of all the input operands of primitive function with op type %S are unknown", PrimitiveOpTypeName(op));
+            outputDataType = firstKnownInputDataType;
+
+        if (outputDataType == DataType::Unknown)
+            InvalidArgument("The DataType of all the input operands of primitive function with op type %S are unknown", PrimitiveOpTypeName(op).c_str());
 
         // We currently require that the inputs' dynamic axes if any match
         std::vector<Axis> outputDynamicAxes;
         if ((op == PrimitiveOpType::SumAll) || (op == PrimitiveOpType::SquaredError) || (op == PrimitiveOpType::CrossEntropyWithSoftmax) || (op == PrimitiveOpType::ClassificationError))
             outputDynamicAxes = std::vector<Axis>({});
-        if (op == PrimitiveOpType::Where)
+        else if (op == PrimitiveOpType::Where)
             outputDynamicAxes = AsVector<Axis>(functionConfig[PrimitiveFunction::AttributeNameNewDynamicAxes].Value<std::vector<DictionaryValue>>());
         else if (op == PrimitiveOpType::ScatterPacked)
             outputDynamicAxes = inputs[2].DynamicAxes();
@@ -525,9 +561,8 @@ namespace CNTK
             if (!axis1.IsStaticAxis() || !axis2.IsStaticAxis())
                 LogicError("TransposeAxes operation currently does not support transposing dynamic axes");
 
-            auto transposedTensorShape = AsTensorShape(inputs[0].Shape());
-            transposedTensorShape.SwapDimsInPlace(axis1.StaticAxisIndex(), axis2.StaticAxisIndex());
-            outputShape = AsNDShape(transposedTensorShape);
+            outputShape = inputs[0].Shape();
+            std::swap(outputShape[axis1.StaticAxisIndex()], outputShape[axis2.StaticAxisIndex()]);
             break;
         }
         case PrimitiveOpType::Slice:
@@ -558,7 +593,7 @@ namespace CNTK
             if ((axis.StaticAxisIndex() < outputTensorShape.GetRank()) && (0 <= realBeginIndex) && (realBeginIndex <= realEndIndex) && (realEndIndex <= sliceAxisDim))
                 outputTensorShape.NarrowTo(axis.StaticAxisIndex(), realBeginIndex, realEndIndex);
 
-            outputShape = AsNDShape(outputTensorShape);
+            outputShape = AsNDShape(outputTensorShape, /*allowNonFlattenableTensorShapes = */ true);
             break;
         }
         case PrimitiveOpType::Reshape:
@@ -641,18 +676,18 @@ namespace CNTK
             assert(inputs.size() == 2);
 
             if ((inputs[0].Shape().Rank() > 2) || ((inputs[0].Shape().Rank() > 1) && (inputs[0].Shape()[1] != 1)))
-                InvalidArgument("The shape of input operands for the %S operation should have at most one axis", PrimitiveOpTypeName(op));
+                InvalidArgument("The shape of input operands for the %S operation should have at most one axis", PrimitiveOpTypeName(op).c_str());
 
             auto predictionShape = inputs[0].Shape();
             auto labelsShape = inputs[1].Shape();
             if (predictionShape != labelsShape)
-                RuntimeError("Prediction output operand's shape %S is incompatible with label operand's shape %S for the %S operation", AsStringForErrorReporting(predictionShape).c_str(), AsStringForErrorReporting(labelsShape).c_str(), PrimitiveOpTypeName(op));
+                RuntimeError("Prediction output operand's shape %S is incompatible with label operand's shape %S for the %S operation", AsStringForErrorReporting(predictionShape).c_str(), AsStringForErrorReporting(labelsShape).c_str(), PrimitiveOpTypeName(op).c_str());
 
             std::vector<size_t> reductionAxes;
             for (size_t i = 0; i < inputs[0].Shape().Rank(); ++i)
                 reductionAxes.push_back(i);
 
-            outputShape = ReductionOpOutputShape(op, predictionShape, reductionAxes);
+            outputShape = ReductionOpOutputShape(op, predictionShape, reductionAxes, /*preserveReductionAxes =*/ false);
             break;
         }
         case PrimitiveOpType::PastValue:
@@ -662,24 +697,24 @@ namespace CNTK
             Variable inputOperandVar = inputs[0];
             Variable initialStateVar = inputs[1];
 
-            // TODO: Current we only support a scalar initial state
-            if (!initialStateVar.IsConstant() || (initialStateVar.Shape().Rank() > 0))
-                LogicError("Currently PastValue/FutureValue Function only supports scalar initial state");
-
             // TODO: We currently only support input operand with 1 dynamic axis for PastValue/FutureValue
             if (inputOperandVar.DynamicAxes().size() != 2)
                 LogicError("Currently PastValue/FutureValue Function only supports input operand with with 2 dynamic axis (1 sequence-axis and 1 batch-axis)");
 
-            outputShape = UnaryElementwiseOpOutputShape(inputs[0].Shape());
+            outputShape = BinaryElementwiseOpOutputShape(op, inputs[0].Shape(), inputs[1].Shape());
             break;
         }
         case PrimitiveOpType::ReduceElements:
         {
             assert(inputs.size() == 1);
             auto reductionAxis = functionConfig[PrimitiveFunction::AttributeNameAxis].Value<Axis>();
+            if (reductionAxis == Axis::AllStaticAxes())
+                outputShape = {};
+            else
+            {
             std::vector<size_t> reductionAxes = { reductionAxis.StaticAxisIndex() };
-
-            outputShape = ReductionOpOutputShape(op, inputs[0].Shape(), reductionAxes);
+                outputShape = ReductionOpOutputShape(op, inputs[0].Shape(), reductionAxes, /*preserveReductionAxes =*/ true);
+            }
             break;
         }
         case PrimitiveOpType::BatchNormalization:
@@ -711,9 +746,6 @@ namespace CNTK
             if (inputs[0].DynamicAxes().empty() || inputs[1].DynamicAxes().empty() || inputs[2].DynamicAxes().empty())
                 InvalidArgument("ScatterPacked requires all its operands to have dynamic axes");
 
-            if (inputs[1].Shape().Rank() != 1)
-                InvalidArgument("ScatterPacked requires the packedIndex operand to be a scalar sequence");
-
             outputShape = inputs[0].Shape();
             break;
         }
@@ -733,12 +765,15 @@ namespace CNTK
             break;
         }
         default:
-            LogicError("Specified op %S not yet supported", PrimitiveOpTypeName(op));
+            LogicError("Specified op %S not yet supported", PrimitiveOpTypeName(op).c_str());
             break;
         }
 
-        return { OutputVariable(outputShape, outputDataType, owner, outputDynamicAxes) };
+        return{ OutputVariable(outputShape, outputDataType, owner, outputDynamicAxes, functionName.empty() ? L"" : functionName + L"_output") };
     }
+
+    /*static*/ const std::wstring CompositeFunction::CompositeFunctionOpName = L"CompositeFunctionOpName";
+    /*static*/ std::atomic<unsigned int> CompositeFunction::s_nextAutoGeneratedDynamicAxis(0);
 
     static const std::wstring s_primitiveFunctionTypeValue = L"PrimitiveFunction";
 
@@ -1019,9 +1054,10 @@ namespace CNTK
         variableToNodeMap[variable] = nullptr;
 
         std::shared_ptr<ComputationNode<ElementType>> computationNodePtr;
+        auto internalNodeName = CNTKInternalNodeNameFromUidAndName(variable.Uid(), variable.Name());
         if (variable.IsParameter() || variable.IsConstant())
         {
-            computationNodePtr = builder.CreateLearnableParameter(variable.Uid(), AsTensorShape(variable.Shape()));
+            computationNodePtr = builder.CreateLearnableParameter(internalNodeName, AsTensorShape(variable.Shape()));
             network->InitLearnableParameters(computationNodePtr, L"fixedValue", 0); // must call this to follow protocol; can overwrite later
             if (!variable.NeedsGradient())
                 computationNodePtr->SetLearningRateMultiplier(0.0);
@@ -1059,9 +1095,9 @@ namespace CNTK
                 network->AddNodeToNetAndAttachInputs(New<DynamicAxisNode<ElementType>>(network->GetDeviceId(), internalDynamicAxisName), {});
 
             if (IsSparseInput(variable))
-                computationNodePtr = builder.CreateSparseInputNode(variable.Uid(), AsTensorShape(variable.Shape()), internalDynamicAxisName);
+                computationNodePtr = builder.CreateSparseInputNode(internalNodeName, AsTensorShape(variable.Shape()), internalDynamicAxisName);
             else
-                computationNodePtr = builder.CreateInputNode(variable.Uid(), AsTensorShape(variable.Shape()), internalDynamicAxisName);
+                computationNodePtr = builder.CreateInputNode(internalNodeName, AsTensorShape(variable.Shape()), internalDynamicAxisName);
 
             if (variable.NeedsGradient())
             {
@@ -1254,16 +1290,11 @@ namespace CNTK
             Variable inputOperandVar = functionInputs[0];
             Variable initialStateVar = functionInputs[1];
 
-            // Get the intial state of the PastValue/FutureValue operation
-            ElementType initStateValue;
-            NDArrayView tempView({}, &initStateValue, 1, DeviceDescriptor::CPUDevice());
-            tempView.CopyFrom(*(Constant(initialStateVar).Value()));
-
             size_t offset = primitiveFunction->Attributes()[PrimitiveFunction::AttributeNameOffset].Value<size_t>();
             if (op == PrimitiveOpType::PastValue)
-                computationNodePtr = New<PastValueNode<ElementType>>(network->GetDeviceId(), functionName, (float)initStateValue, AsTensorShape(inputOperandVar.Shape()), offset);
+                computationNodePtr = New<PastValueNode<ElementType>>(network->GetDeviceId(), functionName, AsTensorShape(inputOperandVar.Shape()), offset);
             else
-                computationNodePtr = New<FutureValueNode<ElementType>>(network->GetDeviceId(), functionName, (float)initStateValue, AsTensorShape(inputOperandVar.Shape()), offset);
+                computationNodePtr = New<FutureValueNode<ElementType>>(network->GetDeviceId(), functionName, AsTensorShape(inputOperandVar.Shape()), offset);
 
             break;
         }
@@ -1311,7 +1342,7 @@ namespace CNTK
             break;
         }
         default:
-            LogicError("Specified op %S not yet supported", PrimitiveOpTypeName(op));
+            LogicError("Specified op %S not yet supported", PrimitiveOpTypeName(op).c_str());
             break;
         }
 
@@ -1322,9 +1353,14 @@ namespace CNTK
         // Let's reorder inputNodesBasePtrs properly since the ordering of inputs of CNTK internal ComputationNode may be different from the PrimitiveFunction inputs ordering
         ReorderAsCNTKComputationNodeInputs(op, inputNodesBasePtrs);
         if (computationNodePtr->Is<INumInputs>())
-            inputNodesBasePtrs.resize(computationNodePtr->As<INumInputs>()->GetExpectedNumInputs());
-        else if ((op == PrimitiveOpType::PastValue) || (op == PrimitiveOpType::FutureValue)) // TODO: Temporary hack to be replaced with support for non-scalar ininital state value operands
-            inputNodesBasePtrs.resize(1);
+        {
+            auto computationNodeExpectedInputCount = computationNodePtr->As<INumInputs>()->GetExpectedNumInputs();
+            if (computationNodeExpectedInputCount != inputNodesBasePtrs.size())
+                LogicError("Input count mismatch: The Primitive function for op %S has %d inputs while the corresponding ComputationNode has %d inputs",
+                           PrimitiveOpTypeName(op).c_str(),
+                           (int)inputNodesBasePtrs.size(),
+                           (int)computationNodeExpectedInputCount);
+        }
 
         network->AddNodeToNetAndAttachInputs(computationNodePtr, inputNodesBasePtrs);
 
@@ -1401,8 +1437,8 @@ namespace CNTK
             // TODO: Support changing the device across different invocations of the forward method on a Function instance
             if (AsDeviceDescriptor(m_computationNetwork->GetDeviceId()) != device)
                 LogicError("Changing device across different Forward calls on a CNTK composite Function is currently unsupported");
-        }
 
+        }
         else
         {
             m_computationNetwork = std::make_shared<ComputationNetwork>(AsCNTKImplDeviceId(device));
@@ -1413,20 +1449,11 @@ namespace CNTK
             if (backpropRoots.size() > 1)
                 LogicError("More than one backprop roots is currently unsupported");
 
-            ComputationNodeBasePtr backpropRootNode;
-
             // Now recursively create the network in a top-down fashion
             auto rootFunction = RootFunction();
             auto rootFunctionOutputs = rootFunction->Outputs();
-            std::vector<ComputationNodeBasePtr> forwardRootNodes;
             for (auto rootOutput : rootFunctionOutputs)
-            {
-                auto currentRootNode = GetNode(rootOutput, m_computationNetwork, builder, m_variableToNodeMap, m_isVariableRootMap);
-                forwardRootNodes.push_back(currentRootNode);
-
-                if (backpropRoots.find(rootOutput) != backpropRoots.end())
-                    backpropRootNode = m_variableToNodeMap[rootOutput];
-            }
+                GetNode(rootOutput, m_computationNetwork, builder, m_variableToNodeMap, m_isVariableRootMap);
 
             // If any of the function outputs is not a root node, we need to explicitly add it to the 'output' group of the ComputationNetwork
             for (auto rootOutput : rootFunctionOutputs)
@@ -1464,6 +1491,9 @@ namespace CNTK
                 }
             }
 
+#ifdef _DEBUG
+            m_computationNetwork->SetTraceLevel(1);
+#endif
             m_computationNetwork->CompileNetwork();
 
             // Verify that the shapes of the output Variables that we computed match the corresponding nodes in the ComputationNetwork
@@ -1482,8 +1512,26 @@ namespace CNTK
                     }
                 }
             }
+        }
 
-            if (allocateNetworkMatrices)
+
+        if (!m_networkMatricesAllocated && allocateNetworkMatrices)
+        {
+            ComputationNodeBasePtr backpropRootNode;
+
+            // Now recursively create the network in a top-down fashion
+            auto rootFunction = RootFunction();
+            auto rootFunctionOutputs = rootFunction->Outputs();
+            std::vector<ComputationNodeBasePtr> forwardRootNodes;
+            for (auto rootOutput : rootFunctionOutputs)
+            {
+                auto currentRootNode = m_variableToNodeMap[rootOutput];
+                forwardRootNodes.push_back(currentRootNode);
+
+                if (m_currentBackpropRoots.find(rootOutput) != m_currentBackpropRoots.end())
+                    backpropRootNode = currentRootNode;
+            }
+
             m_computationNetwork->AllocateAllMatrices(forwardRootNodes, {}, backpropRootNode);
             m_networkMatricesAllocated = allocateNetworkMatrices;
         }
@@ -1494,101 +1542,180 @@ namespace CNTK
     template <typename ElementType>
     /*static*/ std::pair<std::shared_ptr<const Matrix<ElementType>>, MBLayoutPtr> CompositeFunction::GetCNTKImplMatrixAndMBLayoutFromValueObject(Variable var, const ValuePtr& value)
     {
-        if (var.GetDataType() != value->Data()->GetDataType())
-            LogicError("The Variable's DataType %s does not match the corresponding Value's DataType %s", DataTypeName(var.GetDataType()), DataTypeName(value->Data()->GetDataType()));
+        if (var.GetDataType() != value->GetDataType())
+            LogicError("The Variable's DataType %s does not match the corresponding Value's DataType %s", DataTypeName(var.GetDataType()), DataTypeName(value->GetDataType()));
 
-        if (AsDataType<ElementType>() != value->Data()->GetDataType())
-            LogicError("The specified ElementType %s does not match the DataType %s", typeid(ElementType).name(), DataTypeName(value->Data()->GetDataType()));
+        if (AsDataType<ElementType>() != value->GetDataType())
+            LogicError("The specified ElementType %s does not match the DataType %s", typeid(ElementType).name(), DataTypeName(value->GetDataType()));
 
         // TODO: Is supplying dense data for an Input variable tagged as sparse, a fatal error?
-        if (IsSparseInput(var) && !value->Data()->IsSparse())
+        if (IsSparseInput(var) && !value->IsSparse())
             InvalidArgument("Dense input data supplied for a sparse input Variable");
 
-        if (IsSparseInput(var) && (value->Data()->GetStorageFormat() != StorageFormat::SparseCSC))
+        if (IsSparseInput(var) && (value->GetStorageFormat() != StorageFormat::SparseCSC))
             InvalidArgument("Sparse Input data must be in SparseCSC format");
 
-        if (value->Data()->Shape().Rank() == var.Shape().Rank())
-            return{ value->Data()->GetMatrix<ElementType>(), nullptr };
+        auto varShape = var.Shape();
+        auto valueShape = value->Shape();
+        if (valueShape.Rank() < varShape.Rank())
+            InvalidArgument("Value's rank should be >= the Variable's rank");
 
-        if (value->Data()->Shape().Rank() < (var.Shape().Rank() + var.DynamicAxes().size()))
-            InvalidArgument("Value's number of axes should be larger than the Variable's number of axes by number of dynamic axes");
+        size_t maxAddionalValueAxes = std::max<size_t>(2, var.DynamicAxes().size());
+        if (valueShape.Rank() > (varShape.Rank() + maxAddionalValueAxes))
+            InvalidArgument("Value rank should be larger than the Variable%S rank at most by number of dynamic axes", ParanthesizedName(var.Name()).c_str());
+
+        if (valueShape.SubShape(0, varShape.Rank()) != varShape)
+        {
+            InvalidArgument("The %s dimensions of the Value shape %S do not match the shape of the variable %S that it corresponds to!",
+                            Internal::IsReversingTensorShapesInErrorMessagesEnabled() ? "trailing" : "leading",
+                            AsStringForErrorReporting(valueShape).c_str(),
+                            AsStringForErrorReporting(varShape).c_str());
+        }
+
+        if (var.DynamicAxes().empty())
+            return{ value->Data()->GetMatrix<ElementType>(), nullptr };
 
         if (var.DynamicAxes().size() > 2)
             LogicError("More than 2 dynamic axis for a variable is currently unsupported");
 
-        size_t maxNumTimeSteps = value->Data()->Shape()[var.Shape().Rank()];
-        size_t numSequences = value->Data()->Shape()[var.Shape().Rank() + 1];
-
         auto mask = value->Mask();
-        if ((mask != nullptr) && ((var.Shape().Rank() + mask->Shape().Rank()) != value->Data()->Shape().Rank()))
+        if ((mask != nullptr) && ((varShape.Rank() + mask->Shape().Rank()) != valueShape.Rank()))
             InvalidArgument("Invalid Value object; the sum of the rank of the mask and data does not equal the Variable's rank + number of dynamic axes");
+
+        auto getNumTimeStepsAndSequencesFunc = [](const NDShape& maskShape) {
+            size_t maxNumTimeSteps = 1;
+            size_t numSequences = 1;
+            if (maskShape.Rank() > 0)
+                maxNumTimeSteps = maskShape[0];
+
+            if (maskShape.Rank() > 1)
+                numSequences = maskShape[1];
+
+            return std::pair<size_t, size_t>(maxNumTimeSteps, numSequences);
+        };
+
+        size_t maxNumTimeSteps, numSequences;
+        std::tie(maxNumTimeSteps, numSequences) = getNumTimeStepsAndSequencesFunc(valueShape.SubShape(varShape.Rank()));
+
+        auto getSequenceStartsAndLengthsFunc = [&getNumTimeStepsAndSequencesFunc](const NDMaskPtr& mask, std::vector<ptrdiff_t>& sequenceBeginIndices, std::vector<size_t>& sequenceLengths) {
+            auto cpuMask = mask;
+            if (mask->Device() != DeviceDescriptor::CPUDevice())
+                cpuMask = mask->DeepClone(DeviceDescriptor::CPUDevice());
+
+            const MaskKind* maskBuffer = cpuMask->DataBuffer();
+            size_t maxNumTimeSteps, numSequences;
+            std::tie(maxNumTimeSteps, numSequences) = getNumTimeStepsAndSequencesFunc(mask->Shape());
+
+            for (size_t i = 0; i < numSequences; ++i)
+            {
+                MaskKind firstMaskEntry = maskBuffer[i * maxNumTimeSteps];
+                if (firstMaskEntry == MaskKind::SequenceBegin)
+                    sequenceBeginIndices[i] = 0;
+                else if (firstMaskEntry == MaskKind::Valid)
+                    sequenceBeginIndices[i] = Microsoft::MSR::CNTK::SentinelValueIndicatingUnspecifedSequenceBeginIdx;
+                else
+                    LogicError("The first entry of a mask should be Valid or SequenceBegin");
+
+                size_t currentSequenceLength = 1;
+                bool currentSequenceEndAlreadyFound = false;
+                for (size_t j = 1; j < maxNumTimeSteps; ++j)
+                {
+                    if (maskBuffer[(i * maxNumTimeSteps) + j] == MaskKind::Invalid)
+                        currentSequenceEndAlreadyFound = true;
+                    else
+                    {
+                        if (currentSequenceEndAlreadyFound)
+                            InvalidArgument("Invalid Value object; only trailing steps of a sequence can be masked");
+
+                        currentSequenceLength++;
+                    }
+                }
+
+                sequenceLengths[i] = currentSequenceLength;
+            }
+        };
 
         if ((numSequences == 1) || (maxNumTimeSteps == 1))
         {
             // The data need not be shuffled
-            std::shared_ptr<const Matrix<ElementType>> matrixData = value->Data()->GetMatrix<ElementType>(var.Shape().Rank());
+            std::shared_ptr<const Matrix<ElementType>> matrixData = value->Data()->GetMatrix<ElementType>(varShape.Rank());
             auto layout = std::make_shared<MBLayout>();
+            if (!mask)
+            {
             if (maxNumTimeSteps == 1)
                 layout->InitAsFrameMode(numSequences);
             else
             {
-                layout->Init(1, maxNumTimeSteps);
+                    layout->Init(numSequences, maxNumTimeSteps);
                 layout->AddSequence(0, 0, 0, maxNumTimeSteps);
+            }
+            }
+            else
+            {
+                layout->Init(numSequences, maxNumTimeSteps);
+
+                std::vector<ptrdiff_t> sequenceBeginIndices(numSequences, 0);
+                std::vector<size_t> sequenceLengths(numSequences, maxNumTimeSteps);
+                getSequenceStartsAndLengthsFunc(mask, sequenceBeginIndices, sequenceLengths);
+
+                for (size_t i = 0; i < numSequences; ++i)
+                    layout->AddSequence(i, i, sequenceBeginIndices[i], sequenceLengths[i]);
             }
 
             return{ matrixData , layout};
         }
         else
         {
+            std::vector<ptrdiff_t> sequenceBeginIndices(numSequences, 0);
             std::vector<size_t> sequenceLengths(numSequences, maxNumTimeSteps);
             if (mask != nullptr)
-            {
-                // Determine the sequence lengths from the mask
-                std::unique_ptr<char[]> maskData(mask->GetMatrix()->CopyToArray());
-                for (size_t i = 0; i < numSequences; ++i)
-                {
-                    size_t currentSequenceLength = 0;
-                    bool currentSequenceEndAlreadyFound = false;
-                    for (size_t j = 0; j < maxNumTimeSteps; ++j)
-                    {
-                        if (maskData[(i * maxNumTimeSteps) + j] == 1)
-                        {
-                            if (currentSequenceEndAlreadyFound)
-                                InvalidArgument("Invalid Value object; only trailing steps of a sequence can be masked");
+                getSequenceStartsAndLengthsFunc(mask, sequenceBeginIndices, sequenceLengths);
 
-                            currentSequenceLength++;
-                        }
-                        else
-                        {
-                            currentSequenceEndAlreadyFound = true;
-                        }
-                    }
-
-                    sequenceLengths[i] = currentSequenceLength;
-                }
-            }
-
-            // The data needs to be rearranged since CNTK requires sequences to be interleaved across timesteps
-            std::vector<MBLayout::SequenceInfo> sequences;
-            for (size_t i = 0; i < numSequences; ++i)
-                sequences.push_back({ i, SIZE_MAX, 0, sequenceLengths[i]});
+            bool hasTruncatedSequences = std::find_if(sequenceBeginIndices.begin(), sequenceBeginIndices.end(), [](const int& val) { return (val < 0); }) != sequenceBeginIndices.end();
 
             auto layout = std::make_shared<MBLayout>();
             std::vector<std::pair<size_t, size_t>> placement;
-            std::vector<size_t> rowAllocations;
-            layout->InitAsPackedSequences(sequences, placement, rowAllocations);
+            if (!hasTruncatedSequences)
+            {
+                std::vector<MBLayout::SequenceInfo> sequences;
+                for (size_t i = 0; i < numSequences; ++i)
+                    sequences.push_back({ i, SIZE_MAX, sequenceBeginIndices[i], sequenceLengths[i] });
+
+                std::vector<size_t> rowAllocations;
+                layout->InitAsPackedSequences(sequences, placement, rowAllocations);
+                        }
+                        else
+                        {
+                layout->Init(numSequences, maxNumTimeSteps);
+
+                // We cannot pack as some of the sequences are truncated and thus all sequences have to be
+                // kept in their original parallel streams
+                placement.resize(numSequences);
+                for (size_t i = 0; i < numSequences; ++i)
+                {
+                    layout->AddSequence(i, i, sequenceBeginIndices[i], sequenceLengths[i]);
+
+                    // Add the gap if there is one
+                    if (sequenceLengths[i] < maxNumTimeSteps)
+                        layout->AddSequence(GAP_SEQUENCE_ID, i, sequenceLengths[i], maxNumTimeSteps);
+
+                    placement[i] = std::make_pair(i, 0);
+                }
+            }
+
             if (maxNumTimeSteps != layout->GetNumTimeSteps())
                 LogicError("The number of time steps in the packed MBLayout does not match the longest sequence's length in the Value object");
 
             if (numSequences != layout->GetNumSequences())
                 LogicError("The number of sequences in the packed MBLayout does not match the sequence count in the Value object");
 
+            // The data needs to be rearranged since CNTK requires sequences to be interleaved across timesteps
             // Now generate the gather indices
-            auto matrixData = std::make_shared<Matrix<ElementType>>(var.Shape().TotalSize(),
+            auto matrixData = std::make_shared<Matrix<ElementType>>(varShape.TotalSize(),
                                                                     layout->GetNumCols(),
-                                                                    AsCNTKImplDeviceId(value->Data()->Device()),
-                                                                    value->Data()->IsSparse() ? MatrixType::SPARSE : MatrixType::DENSE,
-                                                                    AsCNTKImplMatrixFormat(value->Data()->GetStorageFormat()));
+                                                                    AsCNTKImplDeviceId(value->Device()),
+                                                                    value->IsSparse() ? MatrixType::SPARSE : MatrixType::DENSE,
+                                                                    AsCNTKImplMatrixFormat(value->GetStorageFormat()));
 
             std::vector<size_t> sequencesShorterThanLongestSequence;
             for (size_t i = 0; i < numSequences; ++i)
@@ -1606,8 +1733,8 @@ namespace CNTK
                     gatherIndicesVector[((targetStartIdxInParallelStream + j) * layout->GetNumParallelSequences()) + targetParallelStreamIdx] = (ElementType)((i * maxNumTimeSteps) + j);
             }
 
-            auto gatherIdxMatrix = std::make_shared<Matrix<ElementType>>(1, layout->GetNumCols(), gatherIndicesVector.data(), AsCNTKImplDeviceId(value->Data()->Device()));
-            matrixData->DoGatherColumnsOf(0, *gatherIdxMatrix, *(value->Data()->GetMatrix<ElementType>(var.Shape().Rank())), 1);
+            auto gatherIdxMatrix = std::make_shared<Matrix<ElementType>>(1, layout->GetNumCols(), gatherIndicesVector.data(), AsCNTKImplDeviceId(value->Device()));
+            matrixData->DoGatherColumnsOf(0, *gatherIdxMatrix, *(value->Data()->GetMatrix<ElementType>(varShape.Rank())), 1);
             return{ matrixData, layout };
         }
     }
@@ -1616,53 +1743,111 @@ namespace CNTK
     /*static*/ ValuePtr CompositeFunction::GetValueObjectFromCNTKImplMatrixAndMBLayout(const NDShape& sampleShape, const Matrix<ElementType>& matrix, const MBLayoutPtr& layout, bool readOnly /*= true*/)
     {
         NDShape valueDataShape = sampleShape;
+
+        size_t maxNumTimeSteps = 1;
+        size_t numSequences = 1;
         if (layout != nullptr)
-            valueDataShape = valueDataShape.AppendShape({ layout->GetNumTimeSteps(), layout->GetNumSequences() });
+        {
+            maxNumTimeSteps = layout->GetNumTimeSteps();
+            numSequences = layout->GetNumSequences();
+            valueDataShape = valueDataShape.AppendShape({ maxNumTimeSteps, numSequences });
+        }
+
+        auto createMaskFunc = [](const MBLayoutPtr& layout, const DeviceDescriptor& device, std::vector<size_t>& sequencesShorterThanLongestSequence) {
+            std::vector<bool> sequenceBeginFlags;
+            std::vector<size_t> sequenceLengths;
+            sequencesShorterThanLongestSequence.clear();
+
+            size_t maxNumTimeSteps = layout->GetNumTimeSteps();
+            size_t numSequences = layout->GetNumSequences();
+            auto& layoutSequences = layout->GetAllSequences();
+
+            size_t sequenceIdx = 0;
+            bool allSequencesStartInThisMB = true;
+            bool allSequencesSameLength = true;
+            for (auto sequenceInfo : layoutSequences)
+            {
+                if (sequenceInfo.seqId != GAP_SEQUENCE_ID)
+                {
+                    auto currentSequenceBeginIdx = std::max<ptrdiff_t>(0, sequenceInfo.tBegin);
+                    auto currentSequenceEndIdx = std::min(maxNumTimeSteps, sequenceInfo.tEnd);
+                    auto currentSequenceLength = (currentSequenceEndIdx - currentSequenceBeginIdx);
+                    auto isCurrentSequenceBeginningInsideThisMB = sequenceInfo.tBegin >= 0;
+
+                    allSequencesStartInThisMB = allSequencesStartInThisMB && isCurrentSequenceBeginningInsideThisMB;
+                    allSequencesSameLength = allSequencesSameLength && (currentSequenceLength == maxNumTimeSteps);
+
+                    sequenceBeginFlags.push_back(isCurrentSequenceBeginningInsideThisMB);
+                    sequenceLengths.push_back(currentSequenceLength);
+
+                    if (currentSequenceLength != maxNumTimeSteps)
+                        sequencesShorterThanLongestSequence.push_back(sequenceIdx);
+
+                    sequenceIdx++;
+                }
+            }
+
+            if (!allSequencesStartInThisMB && (numSequences != layout->GetNumParallelSequences()))
+                LogicError("Cannot create an unpacked Value object from packed data where one or more sequences are truncated");
+
+            bool maskNeeded = !allSequencesSameLength || !allSequencesStartInThisMB;
+
+            NDMaskPtr mask;
+            if (maskNeeded)
+            {
+                mask = MakeSharedObject<NDMask>(NDShape({ maxNumTimeSteps, numSequences }), device);
+                for (size_t i = 0; i < numSequences; ++i)
+                    if (sequenceBeginFlags[i])
+                        mask->MarkSequenceBegin({0, i});
+
+                for (auto shortSequenceIdx : sequencesShorterThanLongestSequence)
+                    mask->InvalidateSection({ sequenceLengths[shortSequenceIdx], shortSequenceIdx }, { NDShape::InferredDimension, 1 });
+            }
+
+            return mask;
+        };
 
         // No data shuffling needed if no layout or the layout has just one time-step or just one sequence
-        if ((layout == nullptr) || (layout->GetNumTimeSteps() == 1) || (layout->GetNumSequences() == 1))
+        std::vector<size_t> sequencesShorterThanLongestSequence;
+        if ((maxNumTimeSteps == 1) || (numSequences == 1))
         {
             // Just create a view over the existing matrix itself
             auto tensorView = new TensorView<ElementType>(std::make_shared<Matrix<ElementType>>(matrix.AsReference()), AsTensorViewShape(valueDataShape));
             auto data = MakeSharedObject<NDArrayView>(AsDataType<ElementType>(), AsDeviceDescriptor(matrix.GetDeviceId()), AsStorageFormat(matrix.GetFormat()), valueDataShape, readOnly, tensorView);
+            if (layout == nullptr)
             return MakeSharedObject<Value>(data);
+            else
+            {
+                auto mask = createMaskFunc(layout, AsDeviceDescriptor(matrix.GetDeviceId()), sequencesShorterThanLongestSequence);
+                return MakeSharedObject<Value>(data, mask);
+            }
         }
 
         if (layout->GetNumCols() != matrix.GetNumCols())
             LogicError("Bad MBLayout: The number of columns in the MBLayout does not match the number of columns in the data matrix!");
 
-        size_t maxNumTimeSteps = layout->GetNumTimeSteps();
-        size_t numSequences = layout->GetNumSequences();
-
-        std::vector<size_t> sequenceLengths;
-        auto& layoutSequences = layout->GetAllSequences();
-        for (auto sequenceInfo : layoutSequences)
-        {
-            if (sequenceInfo.seqId != GAP_SEQUENCE_ID)
-                sequenceLengths.push_back(sequenceInfo.GetNumTimeSteps());
-        }
-
         // Reshuffle to data to unpack and uninterleave the CNTK form packed data
         // Now generate the scatter indices
         auto shuffledMatrixData = std::make_shared<Matrix<ElementType>>(matrix.GetNumRows(), maxNumTimeSteps * numSequences, matrix.GetDeviceId(), matrix.GetMatrixType(), matrix.GetFormat());
-
-        std::vector<size_t> sequencesShorterThanLongestSequence;
-        for (size_t i = 0; i < numSequences; ++i)
-            if (sequenceLengths[i] != maxNumTimeSteps)
-                sequencesShorterThanLongestSequence.push_back(i);
+        auto mask = createMaskFunc(layout, AsDeviceDescriptor(matrix.GetDeviceId()), sequencesShorterThanLongestSequence);
 
         // Set the target location of all gaps to be the last step of the first sequence that is shorter than the longest sequence in the batch
         size_t targetColIdxForInvalidColumns = sequencesShorterThanLongestSequence.empty() ? 0 : (((sequencesShorterThanLongestSequence[0] + 1) * maxNumTimeSteps) - 1);
         std::vector<ElementType> scatterIndicesVector(layout->GetNumCols(), (ElementType)targetColIdxForInvalidColumns);
+
         size_t i = 0;
+        auto& layoutSequences = layout->GetAllSequences();
         for (auto sequenceInfo : layoutSequences)
         {
             if (sequenceInfo.seqId != GAP_SEQUENCE_ID)
             {
                 size_t targetParallelStreamIdx = sequenceInfo.s;
-                size_t targetStartIdxInParallelStream = sequenceInfo.tBegin;
-                for (size_t j = 0; j < sequenceInfo.GetNumTimeSteps(); ++j)
-                    scatterIndicesVector[((targetStartIdxInParallelStream + j) * layout->GetNumParallelSequences()) + targetParallelStreamIdx] = (ElementType)((i * maxNumTimeSteps) + j);
+                auto currentSequenceBeginIdx = std::max<ptrdiff_t>(0, sequenceInfo.tBegin);
+                auto currentSequenceEndIdx = std::min(maxNumTimeSteps, sequenceInfo.tEnd);
+                size_t currentSequenceLength = (currentSequenceEndIdx - currentSequenceBeginIdx);
+
+                for (size_t j = 0; j < currentSequenceLength; ++j)
+                    scatterIndicesVector[((currentSequenceBeginIdx + j) * layout->GetNumParallelSequences()) + targetParallelStreamIdx] = (ElementType)((i * maxNumTimeSteps) + j);
 
                 i++;
             }
@@ -1670,17 +1855,6 @@ namespace CNTK
 
         auto scatterIdxMatrix = std::make_shared<Matrix<ElementType>>(1, layout->GetNumCols(), scatterIndicesVector.data(), matrix.GetDeviceId());
         shuffledMatrixData->DoScatterColumnsOf(0, *scatterIdxMatrix, matrix, 1);
-
-        // Create the mask if needed
-        NDMaskPtr mask;
-        if (!sequencesShorterThanLongestSequence.empty())
-        {
-            mask = MakeSharedObject<NDMask>(NDShape({ maxNumTimeSteps, numSequences }), AsDeviceDescriptor(matrix.GetDeviceId()));
-            for (auto shortSequenceIdx : sequencesShorterThanLongestSequence)
-            {
-                mask->MaskSection({ sequenceLengths[shortSequenceIdx], shortSequenceIdx }, { NDShape::InferredDimension, 1 });
-            }
-        }
 
         auto tensorView = new TensorView<ElementType>(shuffledMatrixData, AsTensorViewShape(valueDataShape));
         auto data = MakeSharedObject<NDArrayView>(AsDataType<ElementType>(), AsDeviceDescriptor(matrix.GetDeviceId()), AsStorageFormat(shuffledMatrixData->GetFormat()), valueDataShape, readOnly, tensorView);
@@ -1705,7 +1879,13 @@ namespace CNTK
     template <typename ElementType>
     /*static*/ void CompositeFunction::PopulateComputationNodeValue(const std::pair<Variable, ValuePtr>& variableValue, ComputationNodeBasePtr& computationNode)
     {
-        auto CNTKMatrixAndMBLayout = GetCNTKImplMatrixAndMBLayoutFromValueObject<ElementType>(variableValue.first, variableValue.second);
+        std::pair<std::shared_ptr<const Matrix<ElementType>>, MBLayoutPtr> CNTKMatrixAndMBLayout;
+        auto packedValue = dynamic_cast<PackedValue*>(variableValue.second.get());
+        if (packedValue)
+            CNTKMatrixAndMBLayout = packedValue->PackedData<ElementType>();
+        else
+            CNTKMatrixAndMBLayout = GetCNTKImplMatrixAndMBLayoutFromValueObject<ElementType>(variableValue.first, variableValue.second);
+
         MBLayoutPtr layout = CNTKMatrixAndMBLayout.second;
 
         auto& nodeData = computationNode->As<ComputationNode<ElementType>>()->Value();
@@ -1728,7 +1908,7 @@ namespace CNTK
             ValuePtr argumentValue = arguments.at(argument);
 
             MBLayoutPtr layout;
-            switch (argumentValue->Data()->GetDataType())
+            switch (argumentValue->GetDataType())
             {
             case DataType::Float:
                 PopulateComputationNodeValue<float>({ argument, argumentValue }, argumentComputationNode);
@@ -1737,7 +1917,7 @@ namespace CNTK
                 PopulateComputationNodeValue<double>({ argument, argumentValue }, argumentComputationNode);
                 break;
             default:
-                LogicError("Unsupported DataType %s", DataTypeName(argumentValue->Data()->GetDataType()));
+                LogicError("Unsupported DataType %s", DataTypeName(argumentValue->GetDataType()));
                 break;
             }
         }
@@ -1748,7 +1928,13 @@ namespace CNTK
     template <typename ElementType>
     /*static*/ void CompositeFunction::PopulateComputationNodeGradient(const std::pair<Variable, ValuePtr>& variableGradient, Microsoft::MSR::CNTK::ComputationNodeBasePtr& computationNode)
     {
-        auto CNTKMatrixAndMBLayout = GetCNTKImplMatrixAndMBLayoutFromValueObject<ElementType>(variableGradient.first, variableGradient.second);
+        std::pair<std::shared_ptr<const Matrix<ElementType>>, MBLayoutPtr> CNTKMatrixAndMBLayout;
+        auto packedValue = dynamic_cast<PackedValue*>(variableGradient.second.get());
+        if (packedValue)
+            CNTKMatrixAndMBLayout = packedValue->PackedData<ElementType>();
+        else
+            CNTKMatrixAndMBLayout = GetCNTKImplMatrixAndMBLayoutFromValueObject<ElementType>(variableGradient.first, variableGradient.second);
+
         MBLayoutPtr layout = CNTKMatrixAndMBLayout.second;
         auto nodeLayout = computationNode->GetMBLayout();
         if (((layout == nullptr) != (nodeLayout == nullptr)) || ((layout != nullptr) && (*layout != *nodeLayout)))
@@ -1769,7 +1955,7 @@ namespace CNTK
             auto outputComputationNode = m_variableToNodeMap[gradientVarValuePair.first];
             ValuePtr gradientValue = gradientVarValuePair.second;
 
-            switch (gradientValue->Data()->GetDataType())
+            switch (gradientValue->GetDataType())
             {
             case DataType::Float:
                 PopulateComputationNodeGradient<float>(gradientVarValuePair, outputComputationNode);
@@ -1778,7 +1964,7 @@ namespace CNTK
                 PopulateComputationNodeGradient<double>(gradientVarValuePair, outputComputationNode);
                 break;
             default:
-                LogicError("Unsupported DataType %s", DataTypeName(gradientValue->Data()->GetDataType()));
+                LogicError("Unsupported DataType %s", DataTypeName(gradientValue->GetDataType()));
                 break;
             }
         }
@@ -1811,23 +1997,32 @@ namespace CNTK
         if (varValue != nullptr)
         {
             // TODO: The shape of the specified output Value object must match the actual output shape
-            if (varValue->Data()->Shape() != valueShape)
-                InvalidArgument("The shape %S of the specified Value object for %s does not match the actual shape %S", AsStringForErrorReporting(varValue->Data()->Shape()).c_str(), getGradient ? "gradient" : "output", AsStringForErrorReporting(valueShape).c_str());
+            if (varValue->Shape() != valueShape)
+                InvalidArgument("The shape %S of the specified Value object for %s does not match the actual shape %S", AsStringForErrorReporting(varValue->Shape()).c_str(), getGradient ? "gradient" : "output", AsStringForErrorReporting(valueShape).c_str());
         }
 
         ValuePtr nodeValue;
+        auto layout = computationNode->GetMBLayout();
         switch (var.GetDataType())
         {
         case DataType::Float:
-            nodeValue = GetValueObjectFromCNTKImplMatrixAndMBLayout<float>(var,
-                                                                           getGradient ? computationNode->As<ComputationNode<float>>()->Gradient() : computationNode->As<ComputationNode<float>>()->Value(),
-                                                                           computationNode->GetMBLayout());
+        {
+            auto& matrix = getGradient ? computationNode->As<ComputationNode<float>>()->Gradient() : computationNode->As<ComputationNode<float>>()->Value();
+            if (varValue == nullptr)
+                nodeValue = MakeSharedObject<PackedValue>(var.Shape(), std::make_shared<Matrix<float>>(matrix.AsReference()), layout, /*readOnly =*/ false);
+            else
+                nodeValue = GetValueObjectFromCNTKImplMatrixAndMBLayout<float>(var, matrix, layout);
             break;
+        }
         case DataType::Double:
-            nodeValue = GetValueObjectFromCNTKImplMatrixAndMBLayout<double>(var,
-                                                                            getGradient ? computationNode->As<ComputationNode<double>>()->Gradient() : computationNode->As<ComputationNode<double>>()->Value(),
-                                                                            computationNode->GetMBLayout());
+        {
+            auto& matrix = getGradient ? computationNode->As<ComputationNode<double>>()->Gradient() : computationNode->As<ComputationNode<double>>()->Value();
+            if (varValue == nullptr)
+                nodeValue = MakeSharedObject<PackedValue>(var.Shape(), std::make_shared<Matrix<double>>(matrix.AsReference()), layout, /*readOnly =*/ false);
+            else
+                nodeValue = GetValueObjectFromCNTKImplMatrixAndMBLayout<double>(var, matrix, layout);
             break;
+        }
         default:
             LogicError("Unsupported DataType %s", DataTypeName(var.GetDataType()));
             break;
@@ -1869,20 +2064,80 @@ namespace CNTK
         }
     }
 
+    const std::vector<Variable>& CompositeFunction::GetArgumentDependencies(const Variable& output)
+    {
+        assert(output.IsOutput());
+
+        auto iter = m_perOutputVarArgumentDependencies.find(output);
+        if (iter != m_perOutputVarArgumentDependencies.end())
+            return iter->second;
+
+        auto wrappedComposite = CompositeFunction::Create(output.Owner());
+        m_perOutputVarArgumentDependencies[output] = wrappedComposite->Arguments();
+
+        return m_perOutputVarArgumentDependencies[output];
+    }
+
     /*virtual*/ BackPropStatePtr CompositeFunction::Forward(const std::unordered_map<Variable, ValuePtr>& arguments,
                                                             std::unordered_map<Variable, ValuePtr>& outputs,
                                                             const DeviceDescriptor& computeDevice,
                                                             const std::unordered_set<Variable>& outputsToRetainBackwardStateFor)
     {
-        // TODO: How about zero argument functions?
+        // Validate arguments and outputs
+        if (outputs.empty())
+            InvalidArgument("CompositeFunction::Forward: At least one output has to be specified!");
+
+        // Make sure that the DataType of the variables and corresponding values match
         // TODO: We need a better way to determine the ElementType for the network
-        auto dataType = arguments.begin()->second->Data()->GetDataType();
+        auto dataType = DataType::Unknown;
+        for (auto variableValuePair : arguments)
+        {
+            if (dataType == DataType::Unknown)
+                dataType = variableValuePair.first.GetDataType();
+            else if (dataType != variableValuePair.first.GetDataType())
+                LogicError("CompositeFunction::Forward: The DataType of all arguments of the Function must be same");
+        }
+
+        if (dataType == DataType::Unknown)
+        {
+            for (auto variableValuePair : outputs)
+            {
+                if (dataType == DataType::Unknown)
+                    dataType = variableValuePair.first.GetDataType();
+            }
+        }
+
         if (dataType == DataType::Float)
             GetComputationNetwork<float>(computeDevice, outputsToRetainBackwardStateFor, true);
-        else
+        else if (dataType == DataType::Double)
             GetComputationNetwork<double>(computeDevice, outputsToRetainBackwardStateFor, true);
+        else
+            InvalidArgument("Unsupported DataType %s", DataTypeName(dataType));
+
+        std::unordered_set<Variable> functionOutputs(this->Outputs().begin(), this->Outputs().end());
+        std::vector<ComputationNodeBasePtr> outputsToEvaluate;
+        std::unordered_set<Variable> requiredArguments;
+        for (auto outputVarValuePair : outputs)
+        {
+            // Ensure that only a subset of this function's outputs are being asked to be evaluated
+            if (functionOutputs.find(outputVarValuePair.first) == functionOutputs.end())
+                InvalidArgument("Requested output is not an Ouptut of the Function");
+
+            auto& requiredArgumentsForCurrentOutput = GetArgumentDependencies(outputVarValuePair.first);
+            requiredArguments.insert(requiredArgumentsForCurrentOutput.begin(), requiredArgumentsForCurrentOutput.end());
+
+            auto outputComputationNode = m_variableToNodeMap[outputVarValuePair.first];
+            outputsToEvaluate.push_back(outputComputationNode);
+        }
 
         // TODO: Avoid copying the data when possible
+
+        // We should have argument values supplied for all required argument dependencies for the requested outputs
+        for (auto requiredArgument : requiredArguments)
+        {
+            if (arguments.find(requiredArgument) == arguments.end())
+                InvalidArgument("Function::Forward: Required argument's (%S) value that the requested output(s) depend on has not been provided", requiredArgument.Name().c_str());
+        }
 
         // Feed data into the arguments of the network
         PopulateNetworkInputs(arguments);
@@ -1893,19 +2148,6 @@ namespace CNTK
         list<ComputationNodeBasePtr> dropoutNodes = m_computationNetwork->GetNodesWithType(OperationNameOf(DropoutNode));
         for (auto& nodeIter : dropoutNodes)
             nodeIter->SetEvalTimeStampOutdatedWrtAll();
-
-        std::unordered_set<Variable> functionOutputs(this->Outputs().begin(), this->Outputs().end());
-        std::vector<ComputationNodeBasePtr> outputsToEvaluate;
-
-        for (auto outputVarValuePair : outputs)
-        {
-            // Ensure that only a subset of this function's outputs are being asked to be evaluated
-            if (functionOutputs.find(outputVarValuePair.first) == functionOutputs.end())
-                InvalidArgument("Requested output is not an Ouptut of the Function");
-
-            auto outputComputationNode = m_variableToNodeMap[outputVarValuePair.first];
-            outputsToEvaluate.push_back(outputComputationNode);
-        }
 
         // The 'outputsToRetainBackwardStateFor' nodes also need to be evaluated if not already specified in 'outputs'
         for (auto rootVarForBackprop : outputsToRetainBackwardStateFor)
@@ -1926,8 +2168,13 @@ namespace CNTK
         GetNetworkOutputs(outputs);
 
         // TODO: How to deal with the specified 'computeDevice'
+        Variable evalTimeStampVariable;
+        if (arguments.empty())
+            evalTimeStampVariable = Inputs()[0];
+        else
+            evalTimeStampVariable = arguments.begin()->first;
 
-        return (outputsToRetainBackwardStateFor.size() > 0) ? MakeSharedObject<CNTKBackPropState>(this->shared_from_this(), std::make_pair(arguments.begin()->first, m_variableToNodeMap[arguments.begin()->first]->GetEvalTimeStamp())) : nullptr;
+        return (outputsToRetainBackwardStateFor.size() > 0) ? MakeSharedObject<CNTKBackPropState>(this->shared_from_this(), std::make_pair(evalTimeStampVariable, m_variableToNodeMap[evalTimeStampVariable]->GetEvalTimeStamp())) : nullptr;
     }
 
     /*virtual*/ void CompositeFunction::Backward(const BackPropStatePtr& state,
@@ -2115,7 +2362,7 @@ namespace CNTK
                 newDynamicAxes.push_back(operandAxis);
         }
 
-        return Internal::Gather(operand, flags, newDynamicAxes);
+        return Internal::Gather(operand, flags, newDynamicAxes, name);
     }
 
     FunctionPtr Dropout(const Variable& operand, double dropoutRate, const std::wstring& name /*= L""*/)
@@ -2204,23 +2451,25 @@ namespace CNTK
 
     FunctionPtr SquaredError(const Variable& prediction, const Variable& targets, const std::wstring& name/* = L""*/)
     {
-        return BinaryOp(PrimitiveOpType::SquaredError, prediction, targets, Dictionary(), name);
+        auto difference = Minus(prediction, targets);
+        auto squaredDifference = ElementTimes(difference, difference);
+        return Internal::ReduceElements(squaredDifference, PrimitiveFunction::InternalSumReductionOpName, Axis::AllStaticAxes(), name);
     }
 
     FunctionPtr CrossEntropyWithSoftmax(const Variable& prediction, const Variable& labels, const std::wstring& name/* = L""*/)
     {
-        return ReduceSum(Minus(ReduceLogSum(prediction, Axis(0)), TransposeTimes(labels, prediction)), name);
+        return Minus(ReduceLogSum(prediction, Axis(0)), TransposeTimes(labels, prediction), name);
     }
 
     FunctionPtr ClassificationError(const Variable& prediction, const Variable& labels, const std::wstring& name/* = L""*/)
     {
-        return ReduceSum(Minus(Constant::Scalar(prediction.GetDataType(), 1.0), TransposeTimes(labels, Hardmax(prediction))), name);
+        return Minus(Constant::Scalar(prediction.GetDataType(), 1.0), TransposeTimes(labels, Hardmax(prediction)), name);
     }
 
     FunctionPtr PastValue(const Variable& operand, const Variable& initialState, size_t offset, const std::wstring& name)
     {
         if (operand.DynamicAxes().size() != 2)
-            InvalidArgument("PastValue overload that does not explicitly specify a dynamic axis can only be used for operands with exactly one dynamic sequence-axis");
+            InvalidArgument("PastValue can only be used for operands with exactly one dynamic sequence-axis and one dynamic batch axis");
 
         auto additionalProperties = Dictionary();
         additionalProperties[PrimitiveFunction::AttributeNameOffset] = DictionaryValue(offset);
@@ -2230,7 +2479,7 @@ namespace CNTK
     FunctionPtr FutureValue(const Variable& operand, const Variable& initialState, size_t offset, const std::wstring& name)
     {
         if (operand.DynamicAxes().size() != 2)
-            InvalidArgument("FutureValue overload that does not explicitly specify a dynamic axis can only be used for operands with exactly one dynamic sequence-axis");
+            InvalidArgument("FutureValue can only be used for operands with exactly one dynamic sequence-axis and one dynamic batch axis");
 
         auto additionalProperties = Dictionary();
         additionalProperties[PrimitiveFunction::AttributeNameOffset] = DictionaryValue(offset);
@@ -2271,7 +2520,7 @@ namespace CNTK
         Constant meanVar(mean);
         Constant invStdDevVar(invStdDev);
 
-        return ElementTimes(Minus(operand, meanVar), invStdDevVar);
+        return ElementTimes(Minus(operand, meanVar), invStdDevVar, name);
     }
 
     FunctionPtr Convolution(const Variable& convolutionMap,
@@ -2285,6 +2534,12 @@ namespace CNTK
                             size_t maxTempMemSizeInSamples,
                             const std::wstring& name)
     {
+        // Currently we require that the Convolution function's operand have a dynamic axis since otherwise
+        // the internal implementation incorrectly infers the batch axis dimension by picking up the first axis as 
+        // the sample shape and considering the rest to be part of the batch axis
+        if (operand.DynamicAxes().empty())
+            LogicError("Convolution currently requires the main operand to have dynamic axes");
+
         auto additionalProperties = Dictionary();
         additionalProperties[PrimitiveFunction::AttributeNameStrides] = strides;
         additionalProperties[PrimitiveFunction::AttributeNameSharing] = AsDictionaryValueVector(sharing);
@@ -2354,10 +2609,13 @@ namespace CNTK
         return CompositeFunction::Create(MakeSharedObject<PrimitiveFunction>(PrimitiveOpType::Select, std::vector<Variable>({ condition, leftOperand, rightOperand }), Dictionary(), name), name);
     }
 
-    FunctionPtr Splice(const std::vector<Variable>& operands, size_t axis, const std::wstring& name /*= L""*/)
+    FunctionPtr Splice(const std::vector<Variable>& operands, const Axis& axis, const std::wstring& name /*= L""*/)
     {
+        if (!axis.IsStaticAxis())
+            LogicError("Splice: Currently only splicing along a static axis is supported");
+
         auto additionalProperties = Dictionary();
-        additionalProperties[PrimitiveFunction::AttributeNameAxis] = Axis(axis);
+        additionalProperties[PrimitiveFunction::AttributeNameAxis] = axis;
 
         return CompositeFunction::Create(MakeSharedObject<PrimitiveFunction>(PrimitiveOpType::Splice, operands, std::move(additionalProperties), name), name);
     }
@@ -2371,7 +2629,7 @@ namespace CNTK
             std::copy(currentFunctionOutputs.begin(), currentFunctionOutputs.end(), std::back_inserter(inputs));
         }
 
-        return Internal::Combine(inputs);
+        return Internal::Combine(inputs, name);
     }
 
     namespace Sequence
@@ -2386,25 +2644,25 @@ namespace CNTK
         FunctionPtr IsFirst(const Variable& operand, const std::wstring& name /*= L""*/)
         {
             VerifyIsSequence(operand);
-            return Internal::IsWithin(operand, 1);
+            return Internal::IsWithin(operand, 1, name);
         }
 
         FunctionPtr IsLast(const Variable& operand, const std::wstring& name /*= L""*/)
         {
             VerifyIsSequence(operand);
-            return Internal::IsWithin(operand, -1);
+            return Internal::IsWithin(operand, -1, name);
         }
 
         FunctionPtr First(const Variable& operand, const std::wstring& name /*= L""*/)
         {
             VerifyIsSequence(operand);
-            return Slice(operand, operand.DynamicAxes()[0], 0, 1);
+            return Slice(operand, operand.DynamicAxes()[0], 0, 1, name);
         }
 
         FunctionPtr Last(const Variable& operand, const std::wstring& name /*= L""*/)
         {
             VerifyIsSequence(operand);
-            return Slice(operand, operand.DynamicAxes()[0], -1, 0);
+            return Slice(operand, operand.DynamicAxes()[0], -1, 0, name);
         }
 
         std::vector<Axis> WhereOpDynamicAxes(const Variable& operand)
@@ -2466,9 +2724,9 @@ namespace CNTK
                 InvalidArgument("CNTK::Sequence::IsWithin: The offset must be positive");
 
             if (offset > 0)
-                return PastValue(Internal::ZeroesLike(operand), Constant::Scalar(operand.GetDataType(), 1.0), offset, name);
+                return PastValue(Internal::ZeroesWithDynamicAxesLike(operand), Constant::Scalar(operand.GetDataType(), 1.0), offset, name);
             else
-                return FutureValue(Internal::ZeroesLike(operand), Constant::Scalar(operand.GetDataType(), 1.0), -offset, name);
+                return FutureValue(Internal::ZeroesWithDynamicAxesLike(operand), Constant::Scalar(operand.GetDataType(), 1.0), -offset, name);
         }
 
         FunctionPtr PackedIndex(const Variable& operand, const Variable& index, const std::wstring& name /*= L""*/)
@@ -2486,17 +2744,21 @@ namespace CNTK
             return CompositeFunction::Create(MakeSharedObject<PrimitiveFunction>(PrimitiveOpType::ScatterPacked, std::vector<Variable>({ operand, packedIndex, condition }), Dictionary(), name), name);
         }
 
-        FunctionPtr ZeroesLike(const Variable& operand)
+        FunctionPtr ZeroesWithDynamicAxesLike(const Variable& operand)
+        {
+            if (operand.IsSparse())
         {
             if (operand.Shape().Rank() > 1)
-                LogicError("Internal::ZeroesLike: Currently only 1D inputs are supported!");
+                    LogicError("Internal::ZeroesWithDynamicAxesLike: Currently only 1D sparse inputs are supported!");
 
-            if (operand.IsSparse())
+                // TODO: A matrix multiplication is too expensive for something like this
+                // Replace this with a cheaper operation.
                 return Times(Constant({ 1, operand.Shape()[0] }, operand.GetDataType(), 0.0), operand);
+            }
             else
             {
-                auto rowSliceFunc = Internal::Slice(operand, Axis(0), 0, 1);
-                return Minus(rowSliceFunc, rowSliceFunc);
+                auto reduceAllStaticAxesFunc = Internal::ReduceElements(operand, PrimitiveFunction::InternalSumReductionOpName, Axis::AllStaticAxes());
+                return Minus(reduceAllStaticAxesFunc, reduceAllStaticAxesFunc);
             }
         }
 
@@ -2509,12 +2771,12 @@ namespace CNTK
 
         FunctionPtr Gather(const Variable& operand, const Variable& condition, const std::vector<Axis>& newDynamicAxes, const std::wstring& name /*= L""*/)
         {
-            return Internal::GatherPacked(operand, Internal::PackedIndex(operand, Where(condition, newDynamicAxes)));
+            return Internal::GatherPacked(operand, Internal::PackedIndex(/*layout of*/ operand, Where(condition, newDynamicAxes)), name);
         }
 
         FunctionPtr Scatter(const Variable& operand, const Variable& condition, const std::vector<Axis>& newDynamicAxes, const std::wstring& name /*= L""*/)
         {
-            return Internal::ScatterPacked(operand, Internal::PackedIndex(operand, Where(condition, newDynamicAxes)), condition);
+            return Internal::ScatterPacked(operand, Internal::PackedIndex(/*layout of*/ condition, Where(condition, newDynamicAxes)), /*layout of*/ condition, name);
         }
 
         FunctionPtr Slice(const Variable& operand, const Axis& axis, int beginIndex, int endIndex, const std::wstring& name /*= L""*/)
@@ -2531,7 +2793,7 @@ namespace CNTK
         {
             using namespace std::placeholders;
 
-            if (axis.IsStaticAxis())
+            if (axis.IsStaticAxis() || (axis == Axis::AllStaticAxes()))
             {
                 auto additionalProperties = Dictionary();
                 additionalProperties[PrimitiveFunction::AttributeNameAxis] = axis;
@@ -2555,7 +2817,7 @@ namespace CNTK
             auto cumulativeSumFunction = reductionFunctor(prevAccumulatedValuesFunction, operand);
             cumulativeSumFunction->ReplacePlaceholders({ { cumulativeSumFunctionPlaceholder, cumulativeSumFunction } });
 
-            return CNTK::Slice(cumulativeSumFunction, axis, -1, 0);
+            return CNTK::Slice(cumulativeSumFunction, axis, -1, 0, name);
         }
    }
 }
