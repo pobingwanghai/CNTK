@@ -1620,6 +1620,7 @@ public:
         m_dropoutRate(0)
     {
         m_randomSeed = (unsigned long)CreateUniqId();
+        m_RNGHandle.reset();
     }
 
     virtual void /*ComputationNode::*/ BackpropTo(const size_t inputIndex, const FrameRange& fr) override
@@ -1682,12 +1683,12 @@ public:
 
         // Upon change of the seed, reset RNGHandle to force the creation of a new RNGHandle
         // during forward propagation
-        m_RNGHandle = nullptr;
+        m_RNGHandle.reset();
     }
 
     RNGHandle& GetRNGHandle()
     {
-        if (m_RNGHandle == nullptr)
+        if (!m_RNGHandle)
             m_RNGHandle = RNGHandle::Create(ValuePtr()->GetDeviceId(), m_randomSeed);
 
         return *m_RNGHandle;
@@ -1722,7 +1723,7 @@ public:
 
 private:
     double m_dropoutRate;
-    unsigned long m_randomSeed;
+    unsigned long m_randomSeed=0;
     std::shared_ptr<RNGHandle> m_RNGHandle;
 
     shared_ptr<Matrix<ElemType>> m_maskOfDropout;
