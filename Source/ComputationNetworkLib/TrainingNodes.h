@@ -713,7 +713,7 @@ public:
         m_randomSeed = (unsigned long)val;
 
        //Is below line the reason for Dropout related tests failing?
-       //m_RNGHandle.reset(); // Reset handle. New handle will be generated with next call of GetRNGHandle(...).
+       m_RNGHandle.reset(); // Reset handle. New handle will be generated with next call of GetRNGHandle(...).
     }
 
 protected:
@@ -1604,7 +1604,7 @@ template class LogisticNode<double>;
 // -----------------------------------------------------------------------
 
 template <class ElemType>
-class DropoutNode : public ComputationNode<ElemType>, public NumInputs<1>
+class DropoutNode : public ComputationNode<ElemType>, public NumInputs<1>, public RngUser
 {
     typedef ComputationNode<ElemType> Base;
     UsingComputationNodeMembersBoilerplate;
@@ -1657,7 +1657,7 @@ public:
         {
             // determine drop-out mask for this minibatch
             auto sliceMask = DataFor(*m_maskOfDropout, fr);
-            sliceMask.SetUniformRandomMask((ElemType)m_dropoutRate, (ElemType)(1.0 / (1.0 - m_dropoutRate)) /*pre-scaled*/, GetRNGHandle());
+            sliceMask.SetUniformRandomMask((ElemType)m_dropoutRate, (ElemType)(1.0 / (1.0 - m_dropoutRate)) /*pre-scaled*/, GetRNGHandle(ValuePtr()->GetDeviceId()));
             // apply dropout mask
             sliceOutputValue.AssignElementProductOf(sliceMask, sliceInput0Value);
         }
@@ -1674,23 +1674,6 @@ public:
         if (val < 0 || val >= 1)
             LogicError("DropoutRate must be >= 0 and < 1.");
         m_dropoutRate = val;
-    }
-
-    void SetRandomSeed(const unsigned long val)
-    {
-        m_randomSeed = (unsigned long)val;
-
-        // Upon change of the seed, reset RNGHandle to force the creation of a new RNGHandle
-        // during forward propagation
-        m_RNGHandle.reset();
-    }
-
-    RNGHandle& GetRNGHandle()
-    {
-        if (!m_RNGHandle)
-            m_RNGHandle = RNGHandle::Create(ValuePtr()->GetDeviceId(), m_randomSeed);
-
-        return *m_RNGHandle;
     }
 
     virtual void CopyTo(ComputationNodeBasePtr nodeP, const std::wstring& newName, const CopyNodeFlags flags) const override
@@ -1722,9 +1705,6 @@ public:
 
 private:
     double m_dropoutRate;
-    unsigned long m_randomSeed=0;
-    std::shared_ptr<RNGHandle> m_RNGHandle;
-
     shared_ptr<Matrix<ElemType>> m_maskOfDropout;
 };
 template class DropoutNode<float>;
