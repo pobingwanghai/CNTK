@@ -7,7 +7,7 @@ command = trainNetwork:testNetwork
 
 precision = "float"; traceLevel = 1 ; deviceId = "auto"
 
-rootDir = ".." ; dataDir = "$rootDir$/DataSets/MNIST" ;
+rootDir = "x:" ; dataDir = "$rootDir$/DataSets/MNIST" ;
 outputDir = "./Output" ;
 
 modelPath = "$outputDir$/Models/01_OneHidden"
@@ -82,7 +82,7 @@ trainNetwork = {
         epochSize = 60000
         minibatchSize = 64
         maxEpochs = 10
-        learningRatesPerSample = 0.01*5:0.005
+        learningRatesPerSample = 0.003125
         momentumAsTimeConstant = 0
         
         numMBsToShowResult = 500

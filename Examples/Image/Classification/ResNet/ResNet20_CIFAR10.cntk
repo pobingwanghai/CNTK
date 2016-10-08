@@ -4,7 +4,7 @@ command = TrainConvNet:Eval
 
 precision = "float"; traceLevel = 1 ; deviceId = "auto"
 
-rootDir = "../.." ; configDir = "./" ; dataDir = "$rootDir$/DataSets/CIFAR-10" ;
+rootDir = "x:" ; configDir = "./" ; dataDir = "$rootDir$/DataSets/CIFAR-10" ;
 outputDir = "./Output" ;
 
 modelPath = "$outputDir$/Models/ResNet20_CIFAR10_DataAug"
@@ -64,14 +64,14 @@ TrainConvNet = {
     }
 
     SGD = {
-        epochSize = 0
+        epochSize = 12800
         minibatchSize = 128
 
         # Note that learning rates are 10x more than in the paper due to a different 
         # momentum update rule in CNTK: v{t + 1} = lr*(1 - momentum)*g{t + 1} + momentum*v{t} 
-        learningRatesPerMB = 1.0*80:0.1*40:0.01
+        learningRatesPerMB = 1.0
         momentumPerMB  = 0.9
-        maxEpochs = 160
+        maxEpochs = 10
         L2RegWeight = 0.0001
 
         numMBsToShowResult = 100
@@ -86,8 +86,7 @@ TrainConvNet = {
                 features = { transforms = (
                     { type = "Crop" ; cropType = "random" ; cropRatio = 0.8 ; jitterType = "uniRatio" } :
                     { type = "Scale" ; width = 32 ; height = 32 ; channels = 3 ; interpolations = "linear" } :
-                    { type = "Mean" ; meanFile = "$dataDir$/CIFAR-10_mean.xml" } : 
-                    { type = "Transpose" }
+                    { type = "Mean" ; meanFile = "$dataDir$/CIFAR-10_mean.xml" }
                 )}
                 labels = { labelDim = 10 }
             }
@@ -110,8 +109,7 @@ Eval = {
             input = {
                 features = { transforms = (
                    { type = "Scale" ; width = 32 ; height = 32 ; channels = 3 ; interpolations = "linear" } :
-                   { type = "Mean"; meanFile = "$dataDir$/CIFAR-10_mean.xml" } : 
-                   { type = "Transpose" }
+                   { type = "Mean"; meanFile = "$dataDir$/CIFAR-10_mean.xml" }
                 )}
                 labels = { labelDim = 10 }
             }

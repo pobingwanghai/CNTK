@@ -1,4 +1,4 @@
-# Copyright (c) Microsoft. All rights reserved.
+﻿# Copyright (c) Microsoft. All rights reserved.
 
 # Licensed under the MIT license. See LICENSE.md file in the project root
 # for full license information.
@@ -46,7 +46,7 @@ def simple_mnist(debug_output=False):
         rel_path = os.path.join(os.environ['CNTK_EXTERNAL_TESTDATA_SOURCE_DIRECTORY'],
                                 *"Image/MNIST/v0/Train-28x28_cntk_text.txt".split("/"))
     except KeyError:
-        rel_path = os.path.join(*"../../../../Examples/Image/Datasets/MNIST/Train-28x28_cntk_text.txt".split("/"))
+        rel_path = "x:/Datasets/MNIST/Train-28x28_cntk_text.txt"
     path = os.path.normpath(os.path.join(abs_path, rel_path))
     check_path(path)
 
@@ -90,7 +90,7 @@ def simple_mnist(debug_output=False):
         rel_path = os.path.join(os.environ['CNTK_EXTERNAL_TESTDATA_SOURCE_DIRECTORY'],
                                 *"Image/MNIST/v0/Test-28x28_cntk_text.txt".split("/"))
     except KeyError:
-        rel_path = os.path.join(*"../../../../Examples/Image/Datasets/MNIST/Test-28x28_cntk_text.txt".split("/"))
+        rel_path = "x:/Datasets/MNIST/Test-28x28_cntk_text.txt"
     path = os.path.normpath(os.path.join(abs_path, rel_path))
     check_path(path)
 

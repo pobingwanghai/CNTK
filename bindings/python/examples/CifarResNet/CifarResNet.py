@@ -1,4 +1,4 @@
-# Copyright (c) Microsoft. All rights reserved.
+﻿# Copyright (c) Microsoft. All rights reserved.
 
 # Licensed under the MIT license. See LICENSE.md file in the project root
 # for full license information.
@@ -8,7 +8,7 @@ import numpy as np
 import sys
 import os
 from cntk import Trainer, DeviceDescriptor
-from cntk.learner import sgd
+from cntk.learner import momentum_sgd, momentums_per_sample, learning_rates_per_sample
 from cntk.ops import input_variable, constant, parameter, cross_entropy_with_softmax, combine, classification_error, times, pooling, AVG_POOLING
 from cntk.io import ReaderConfig, ImageDeserializer
 from cntk.initializer import glorot_uniform
@@ -63,9 +63,7 @@ def create_test_mb_source(features_stream_name, labels_stream_name, image_height
 
     image = ImageDeserializer(map_file)
     image.map_features(features_stream_name,
-            [ImageDeserializer.crop(crop_type='Random', ratio=0.8,
-                jitter_type='uniRatio'),
-             ImageDeserializer.scale(width=image_width, height=image_height,
+            [ImageDeserializer.scale(width=image_width, height=image_height,
                  channels=num_channels, interpolations='linear'),
              ImageDeserializer.mean(mean_file)])
     image.map_labels(labels_stream_name, num_classes)
@@ -81,8 +79,8 @@ def get_projection_map(out_dim, in_dim):
     projection_map_values = np.zeros(in_dim * out_dim, dtype=np.float32)
     for i in range(0, in_dim):
         projection_map_values[(i * in_dim) + i] = 1.0
-        shape = (out_dim, in_dim, 1, 1)
-        return constant(value=projection_map_values.reshape(shape))
+    shape = (out_dim, in_dim, 1, 1)
+    return constant(value=projection_map_values.reshape(shape))
 
 # Defines the residual network model for classifying images
 def resnet_classifer(input, num_classes):
@@ -167,11 +165,11 @@ def cifar_resnet(base_path, debug_output=False):
 
     # Instantiate the trainer object to drive the model training
     trainer = Trainer(classifier_output, ce, pe,
-                      [sgd(classifier_output.parameters(), lr=0.0078125)])
+                      [momentum_sgd(classifier_output.parameters(), lr=0.0078125, momentums=0.00703125, l2_regularization_weight=0.0001)])
 
     # Get minibatches of images to train with and perform model training
-    mb_size = 32
-    training_progress_output_freq = 60
+    mb_size = 128
+    training_progress_output_freq = 100
     num_mbs = 1000
 
     if debug_output:
@@ -193,8 +191,8 @@ def cifar_resnet(base_path, debug_output=False):
     features_si = test_minibatch_source.stream_info(feats_stream_name)
     labels_si = test_minibatch_source.stream_info(labels_stream_name)
 
-    mb_size = 64
-    num_mbs = 300
+    mb_size = 512
+    num_mbs = 20
 
     total_error = 0.0
     for i in range(0, num_mbs):
@@ -216,8 +214,7 @@ if __name__ == '__main__':
     # target_device = DeviceDescriptor.cpu_device()
     DeviceDescriptor.set_default_device(target_device)
 
-    base_path = os.path.normpath(os.path.join(
-        *"../../../../Examples/Image/Miscellaneous/CIFAR-10/cifar-10-batches-py".split("/")))
+    base_path = "x:/Datasets/CIFAR-10"
 
     os.chdir(os.path.join(base_path, '..'))
 
