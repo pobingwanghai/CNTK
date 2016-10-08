@@ -1619,7 +1619,7 @@ public:
         : Base(deviceId, name),
         m_dropoutRate(0)
     {
-        m_randomSeed = (unsigned long)CreateUniqId();
+        SetRandomSeed((unsigned long)CreateUniqId());
     }
 
     virtual void /*ComputationNode::*/ BackpropTo(const size_t inputIndex, const FrameRange& fr) override
