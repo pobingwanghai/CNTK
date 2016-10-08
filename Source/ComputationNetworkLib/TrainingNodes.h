@@ -1620,7 +1620,6 @@ public:
         m_dropoutRate(0)
     {
         m_randomSeed = (unsigned long)CreateUniqId();
-        m_RNGHandle.reset();
     }
 
     virtual void /*ComputationNode::*/ BackpropTo(const size_t inputIndex, const FrameRange& fr) override
