@@ -27,9 +27,6 @@ using namespace std;
 
 namespace CNTK
 {
-    /*static*/ const std::wstring Learner::LearningRateAttributeName = L"learningRate";
-    /*static*/ const std::wstring LearnerBase::WasLearningRateResetAttributeName = L"wasLearningRateReset";
-
     template <typename ElementType>
     /*static*/ shared_ptr<const Matrix<ElementType>> LearnerBase::GetMatrix(const NDArrayViewPtr& arrayView)
     {
@@ -162,10 +159,7 @@ namespace CNTK
                              const LearningRatesPerSample& learningRates,
                              AdditionalLearningOptions additionalOptions,
                              bool allocateSmoothGradients /* = true */)
-        : Learner(parameters, learningRates[0]),
-        m_wasLearningRateReset(false),
-        m_learningRateSchedule(learningRates),
-        m_sampleCount(0),
+        : Learner(parameters, learningRates),
         m_minibatchCount(0),
         m_additionalOptions(additionalOptions)
     {
@@ -277,13 +271,10 @@ namespace CNTK
         checkpoint[typeKey] = s_learnerTypeValue;
         checkpoint[sampleCountKey] = m_sampleCount;
         checkpoint[minibatchCountKey] = m_minibatchCount;
+        checkpoint[learningRateScheduleKey] = m_learningRateSchedule.Serialize();
 
-        if (m_wasLearningRateReset)
-            checkpoint[WasLearningRateResetAttributeName] = m_wasLearningRateReset;
-
-        // TODO: should we also save learning rate schedule into the checkpoint?
-        // If that is the case, need to be able to override this method in subclasses
-        // and save momentum schedule as well.
+        // TODO: should we also save momentum schedule into the checkpoint?
+        // If that is the case, need to be able to override this method in subclasses,
 
         for (const auto& parameter : Parameters())
         {
@@ -296,23 +287,20 @@ namespace CNTK
             checkpoint[parameter.Uid()] = *smoothedGradientValue;
         }
 
-        // Add the base Learner's checkpoint state
-        auto baseCheckpointState = Learner::GetCheckpointState();
-        checkpoint.Add(baseCheckpointState);
-
         return checkpoint;
     }
 
     /*virtual*/ void LearnerBase::RestoreFromCheckpoint(const Dictionary& checkpoint) /*override*/
     {
-        static const vector<std::wstring> s_requiredDictionaryKeys = { typeKey, sampleCountKey, minibatchCountKey };
+        static const vector<std::wstring> s_requiredDictionaryKeys = { typeKey, sampleCountKey, minibatchCountKey, learningRateScheduleKey };
         
-        ValidateDictionary<LearnerBase>(checkpoint, s_requiredDictionaryKeys, CurrentVersion());
-
-        ValidateType<LearnerBase>(checkpoint, s_learnerTypeValue, CurrentVersion());
+        ValidateDictionary<LearnerBase>(checkpoint, s_requiredDictionaryKeys, s_learnerTypeValue, CurrentVersion());
 
         m_sampleCount = checkpoint[sampleCountKey].Value<size_t>();
         m_minibatchCount = checkpoint[minibatchCountKey].Value<size_t>();
+        // TODO: which learning rate schedule should take precedence here? 
+        // The one given at construction time or the one loaded from a checkpoint?
+        m_learningRateSchedule = TrainingParameterSchedule<double>::Load(checkpoint[learningRateScheduleKey].Value<Dictionary>());
 
         for (const auto& parameter : Parameters())
         {

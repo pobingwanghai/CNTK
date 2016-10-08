@@ -283,15 +283,6 @@ void CheckEnumValuesNotModified() {
                   "PrimitiveOpType enum value was modified.");
 }
 
-
-static Trainer BuildTrainer(const FunctionPtr& function, const Variable& labels, const LearningRatesPerSample& learningRateSchedule)
-{
-    auto trainingLoss = CNTK::CrossEntropyWithSoftmax(function, labels, L"lossFunction");
-    auto prediction = CNTK::ClassificationError(function, labels, L"classificationError");
-    auto learner = SGDLearner(function->Parameters(), learningRateSchedule);
-   return Trainer(function, trainingLoss, prediction, { learner });
-}
-
 void TestModelSerialization(const DeviceDescriptor& device)
 {
     const size_t inputDim = 2000;
@@ -301,8 +292,6 @@ void TestModelSerialization(const DeviceDescriptor& device)
     const size_t numOutputClasses = 5;
 
     auto features = InputVariable({ inputDim }, true /*isSparse*/, DataType::Float, L"features");
-    auto classifierOutput = LSTMSequenceClassiferNet(features, numOutputClasses, embeddingDim, hiddenDim, cellDim, device, L"classifierOutput");
-
     auto labels = InputVariable({ numOutputClasses }, DataType::Float, L"labels", { Axis::DefaultBatchAxis() });
 
     auto minibatchSource = TextFormatMinibatchSource(L"Train.ctf", { { L"features", inputDim, true, L"x" }, { L"labels", numOutputClasses, false, L"y" } }, 0);
@@ -315,16 +304,35 @@ void TestModelSerialization(const DeviceDescriptor& device)
 
     LearningRatesPerSample learningRateSchedule({ { 2, 0.0005 }, { 2, 0.00025 } }, actualMBSize);
 
-    Trainer trainer = BuildTrainer(classifierOutput, labels, learningRateSchedule);
+    auto classifierOutput = LSTMSequenceClassiferNet(features, numOutputClasses, embeddingDim, hiddenDim, cellDim, device, L"classifierOutput");
+    auto trainingLoss = CNTK::CrossEntropyWithSoftmax(classifierOutput, labels, L"lossFunction");
+    auto prediction = CNTK::ClassificationError(classifierOutput, labels, L"classificationError");
+    auto learner = SGDLearner(classifierOutput->Parameters(), learningRateSchedule);
+    Trainer trainer(classifierOutput, trainingLoss, prediction, { learner });
 
-    trainer.TrainMinibatch({ { features, minibatchData[featureStreamInfo].m_data }, { labels, minibatchData[labelStreamInfo].m_data } }, device);
-
+     trainer.TrainMinibatch({ { features, minibatchData[featureStreamInfo].m_data }, { labels, minibatchData[labelStreamInfo].m_data } }, device);
 
     for (int i = 0; i < 3; ++i)
     {
         Dictionary model = Function::Save(classifierOutput);
+        //Dictionary checkpoint = learner->Serialize();
 
         auto classifierOutputReloaded = Function::Load(model, device);
+
+        auto i1 = classifierOutput->Inputs();
+         auto i2 = classifierOutputReloaded->Inputs();
+         for (int k = 0; k < i1.size(); ++k)
+         {
+             if (i1[k].Uid() != i2[k].Uid())
+                 break;
+         }
+
+        Dictionary model2 = Function::Save(classifierOutputReloaded);
+
+        if (model != model2)
+        {
+            return;
+        }
 
         std::unordered_map<Variable, Variable> replacements;
         const auto& inputs = classifierOutputReloaded->Inputs();
@@ -337,8 +345,12 @@ void TestModelSerialization(const DeviceDescriptor& device)
         }
 
         classifierOutputReloaded->ReplacePlaceholders(replacements);
+        auto trainingLossReloaded = CNTK::CrossEntropyWithSoftmax(classifierOutputReloaded, labels, L"lossFunction");
+        auto predictionReloaded = CNTK::ClassificationError(classifierOutputReloaded, labels, L"classificationError");
+        auto learnerReloaded = SGDLearner(classifierOutputReloaded->Parameters(), learningRateSchedule);
+        //learnerReloaded->RestoreFromCheckpoint(checkpoint);
 
-        Trainer trainerReloaded = BuildTrainer(classifierOutputReloaded, labels, learningRateSchedule);
+        Trainer trainerReloaded(classifierOutputReloaded, trainingLossReloaded, predictionReloaded, { learnerReloaded });
 
         for (int j = 0; j < 2; ++j)
         {
@@ -354,7 +366,7 @@ void TestModelSerialization(const DeviceDescriptor& device)
     }
 }
 
-void TestModelSaving(const DeviceDescriptor& device)
+void TestLegacyModelSaving(const DeviceDescriptor& device)
 {
     const size_t inputDim = 2000;
     const size_t cellDim = 25;
@@ -418,15 +430,14 @@ void SerializationTests()
     TestLearnerSerialization<float>(5, DeviceDescriptor::CPUDevice());
     TestLearnerSerialization<double>(10, DeviceDescriptor::CPUDevice());
 
-    TestModelSerialization(DeviceDescriptor::GPUDevice(0));
+    //TestLegacyModelSaving(DeviceDescriptor::CPUDevice());
     TestModelSerialization(DeviceDescriptor::CPUDevice());
 
 #ifndef CPUONLY
     TestLearnerSerialization<float>(5, DeviceDescriptor::GPUDevice(0));
     TestLearnerSerialization<double>(10, DeviceDescriptor::GPUDevice(0));;
     TestModelSerialization(DeviceDescriptor::GPUDevice(0));
-    TestModelSaving(DeviceDescriptor::GPUDevice(0));
+    TestLegacyModelSaving(DeviceDescriptor::GPUDevice(0));
 #endif
-    
-    TestModelSaving(DeviceDescriptor::CPUDevice());
+ 
 }

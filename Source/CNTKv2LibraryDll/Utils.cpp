@@ -6,6 +6,7 @@
 #include "stdafx.h"
 #include "CNTKLibrary.h"
 #include "Utils.h"
+#include "Serialization.h"
 
 using namespace std;
 
@@ -219,6 +220,17 @@ namespace CNTK
         return (m_dictionaryData->find(key) != m_dictionaryData->end());
     }
 
+    std::vector<std::wstring> Dictionary::Keys() const
+    {
+        std::vector<std::wstring> keys;
+        keys.reserve(m_dictionaryData->size());
+        for (const auto&it : *m_dictionaryData)
+        {
+            keys.push_back(it.first);
+        }
+        return keys;
+    }
+
     void Dictionary::Add(const Dictionary& other)
     {
         for (auto kv : *(other.m_dictionaryData))
@@ -295,14 +307,16 @@ namespace CNTK
         if (schedule.size() == 0)
             RuntimeError("TrainingParameterSchedule::ConstructSchedule : schedule is empty.");
 
-        size_t i = 0;
-        for (const auto& it : schedule)
+        size_t count = 0;
+        for (int i = 0; i < schedule.size(); ++i)
         {
-            if (it.first == 0)
+            const auto& pair = schedule[i];
+            // Unit count for all, but last element must be non-zero.
+            if (i < (schedule.size() - 1) && pair.first == 0)
                 RuntimeError("TrainingParameterSchedule::ConstructSchedule : unit count cannot be 0.");
 
-            i += it.first;
-            m_schedule[m_unit * i] = it.second;
+            count += pair.first;
+            m_schedule[m_unit * count] = pair.second;
         }
     }
 
@@ -345,6 +359,47 @@ namespace CNTK
         m_schedule = move(that.m_schedule);
         m_unit = that.m_unit;
         return *this;
+    }
+
+    static const std::wstring s_trainingParameterScheduleTypeValue = L"TrainingParameterSchedule";
+
+    template <typename T>
+    /*virtual*/ Dictionary TrainingParameterSchedule<T>::Serialize() const
+    {
+        Dictionary schedule;
+        for (const auto& it : m_schedule)
+        {
+            schedule[std::to_wstring(it.first)] = DictionaryValue(it.second);
+        }
+        Dictionary dict;
+        dict[versionKey] = CurrentVersion();
+        dict[typeKey] = s_trainingParameterScheduleTypeValue;
+        dict[unitKey] = m_unit;
+        dict[scheduleKey] = schedule;
+        return dict;
+    }
+
+     template <typename T>
+    /*static*/ TrainingParameterSchedule<T>  TrainingParameterSchedule<T>::Load(const Dictionary& dict)
+    {
+        static const vector<std::wstring> s_requiredDictionaryKeys = { typeKey, unitKey, scheduleKey };
+
+        ValidateDictionary<TrainingParameterSchedule<T>>(dict, s_requiredDictionaryKeys, s_trainingParameterScheduleTypeValue, s_serializationVersion);
+
+        return TrainingParameterSchedule<T>(dict);
+    }
+
+    template <typename T>
+    TrainingParameterSchedule<T>::TrainingParameterSchedule(const Dictionary& dictionary)
+    {
+        m_unit = dictionary[unitKey].Value<size_t>();
+        Dictionary schedule = dictionary[scheduleKey].Value<Dictionary>();
+        vector<std::wstring> keys = schedule.Keys();
+        std::map<size_t, T> map;
+        for (const auto& key : keys)
+        {
+            m_schedule[std::stoll(key)] = schedule[key].Value<T>();
+        }
     }
 
     void MomentumValuesAsTimeConstants::ConvertToPerSampleValues()

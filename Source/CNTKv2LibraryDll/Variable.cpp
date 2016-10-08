@@ -222,9 +222,7 @@ namespace CNTK
     {
         static const vector<std::wstring> s_requiredDictionaryKeys = { typeKey, uidKey, kindKey, dataTypeKey, dynamicAxisKey, isSparseKey, nameKey, needsGradientKey, shapeKey };
 
-        size_t version = ValidateDictionary<Variable>(dict, s_requiredDictionaryKeys, s_modelVersion);
-
-        ValidateType<Variable>(dict, s_variableTypeValue, s_modelVersion);
+        size_t version = ValidateDictionary<Variable>(dict, s_requiredDictionaryKeys, s_variableTypeValue, s_serializationVersion);
 
         const auto& uid = dict[uidKey].Value<std::wstring>();
 
@@ -235,7 +233,7 @@ namespace CNTK
             kind != VariableKind::Placeholder)
         {
             LogicError("Unexpected variable '%ls':'%zu' "
-                        "(%s).", kindKey, kind, GetVersionsString<Variable>(s_modelVersion, version));
+                        "(%s).", kindKey, kind, GetVersionsString<Variable>(s_serializationVersion, version));
         }
         
         DataType dataType = DataType(dict[dataTypeKey].Value<std::size_t>());
@@ -244,7 +242,7 @@ namespace CNTK
             dataType != DataType::Double)
         {
             LogicError("Unexpected variable '%ls':'%zu' "
-                        "(%s).", dataTypeKey, dataType, GetVersionsString<Variable>(s_modelVersion, version));
+                        "(%s).", dataTypeKey, dataType, GetVersionsString<Variable>(s_serializationVersion, version));
         }
         
         const vector<DictionaryValue>& dictionaryValueVector = dict[dynamicAxisKey].Value<vector<DictionaryValue>>();

@@ -807,9 +807,7 @@ namespace CNTK
     {
         static const vector<std::wstring> s_requiredDictionaryKeys = { typeKey, opKey, uidKey, attributesKey, inputsKey, nameKey };
        
-        size_t version = ValidateDictionary<PrimitiveFunction>(dict, s_requiredDictionaryKeys, s_modelVersion);
-
-        ValidateType<PrimitiveFunction>(dict, s_primitiveFunctionTypeValue, s_modelVersion);
+        size_t version = ValidateDictionary<PrimitiveFunction>(dict, s_requiredDictionaryKeys, s_primitiveFunctionTypeValue, s_serializationVersion);
 
         PrimitiveOpType op = PrimitiveOpType(dict[opKey].Value<std::size_t>());
 
@@ -819,7 +817,7 @@ namespace CNTK
         if (op > PrimitiveOpType::Combine)
         {
             LogicError("Unexpected variable '%ls':'%zu' "
-                        "(%s).", opKey, op, GetVersionsString<PrimitiveFunction>(s_modelVersion, version));
+                        "(%s).", opKey, op, GetVersionsString<PrimitiveFunction>(s_serializationVersion, version));
         }
 
         const auto& uid = dict[uidKey].Value<std::wstring>();
@@ -836,7 +834,7 @@ namespace CNTK
             if (uidToVariableMap.find(inputUid) == uidToVariableMap.end())
             {
                 LogicError("There are no input corresponging to input uid = '%ls' "
-                        "(%s).", inputUid, GetVersionsString<PrimitiveFunction>(s_modelVersion, version));
+                        "(%s).", inputUid, GetVersionsString<PrimitiveFunction>(s_serializationVersion, version));
             }
             inputs.push_back(uidToVariableMap.at(inputUid));
         }
@@ -941,9 +939,7 @@ namespace CNTK
     {
         static const vector<std::wstring> s_requiredDictionaryKeys = { typeKey, rootKey, nameKey, inputsKey, functionsKey };
        
-        size_t version = ValidateDictionary<CompositeFunction>(dict, s_requiredDictionaryKeys, s_modelVersion);
-        
-        ValidateType<CompositeFunction>(dict, s_compositeFunctionTypeValue, s_modelVersion);
+        size_t version = ValidateDictionary<CompositeFunction>(dict, s_requiredDictionaryKeys, s_compositeFunctionTypeValue, s_serializationVersion);
 
         const auto& rootUid = dict[rootKey].Value<std::wstring>();
         const auto& name = dict[nameKey].Value<std::wstring>();
@@ -959,7 +955,7 @@ namespace CNTK
             if (uidToInputMap.find(inputVar.Uid()) != uidToInputMap.end())
             {
                 LogicError("Input uids are not unique (several inputs share '%ls' uid) "
-                        "(%s).", inputVar.Uid(), GetVersionsString<CompositeFunction>(s_modelVersion, version));
+                        "(%s).", inputVar.Uid(), GetVersionsString<CompositeFunction>(s_serializationVersion, version));
             }
             uidToInputMap[inputVar.Uid()] = inputVar;
         }
@@ -983,7 +979,7 @@ namespace CNTK
                     {
                         LogicError("Unexpected variable type %ls instead of a Placeholder for input %ls variable (uid = %ls)"
                         "(%s).", VariableKindName(it->second.Kind()), it->second.Name(), it->second.Uid(),
-                        GetVersionsString<CompositeFunction>(s_modelVersion, version));
+                        GetVersionsString<CompositeFunction>(s_serializationVersion, version));
                     }
                     placeholderReplacements[it->second] = output;
                 }

@@ -27,6 +27,9 @@ namespace CNTK
     const std::wstring functionsKey = L"primitive_functions";
     const std::wstring sampleCountKey = L"sample_count";
     const std::wstring minibatchCountKey = L"minibatchCount";
+    const std::wstring unitKey = L"unit";
+    const std::wstring scheduleKey = L"schedule";
+    const std::wstring learningRateScheduleKey = L"learnig_rate_schedule";
 
     template <typename T> 
     inline std::string GetVersionsString(size_t currentVersion, size_t dictVersion)
@@ -49,7 +52,7 @@ namespace CNTK
     // Make sure that the dictionary contains all required keys, and if it does, return version value
     // from the dictionary.
     template <typename T>
-    inline size_t ValidateDictionary(const Dictionary& dict, const std::vector<std::wstring> requiredKeys, size_t currentVersion)
+    inline size_t ValidateDictionary(const Dictionary& dict, const std::vector<std::wstring>& requiredKeys, const std::wstring& typeValue, size_t currentVersion)
     { 
         const auto& version = GetVersion(dict);
 
@@ -61,6 +64,9 @@ namespace CNTK
                             "(%s).", key, GetVersionsString<T>(currentVersion, version));
             }
         }
+
+        ValidateType<T>(dict, typeValue, currentVersion);
+
         return version;
     }
 

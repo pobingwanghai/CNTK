@@ -168,7 +168,7 @@ namespace CNTK
 
     public:
         PrimitiveFunction(PrimitiveOpType op, const std::vector<Variable>& inputs, Dictionary&& functionConfig, const std::wstring& functionName = L"")
-            : Function(inputs, GetOutputVariables(op, inputs, this, functionConfig, functionName), std::move(functionConfig), nullptr, functionName, Internal::GenerateUid(PrimitiveOpTypeName(op)), m_op(op)
+            : Function(inputs, GetOutputVariables(op, inputs, this, functionConfig, functionName), std::move(functionConfig), functionName, Internal::GenerateUid(PrimitiveOpTypeName(op))), m_op(op)
         {
         }
 
@@ -189,7 +189,7 @@ namespace CNTK
 
         virtual Dictionary Serialize() const override;
 
-        virtual size_t CurrentVersion() const override { return s_modelVersion; }
+        virtual size_t CurrentVersion() const override { return s_serializationVersion; }
 
         static FunctionPtr Load(const Dictionary& dictionary, 
                                 const std::unordered_map<std::wstring, Variable>& uidToVariableMap, 
@@ -209,7 +209,7 @@ namespace CNTK
     private:
 
          PrimitiveFunction(PrimitiveOpType op, const std::vector<Variable>& inputs, Dictionary&& functionConfig, const std::wstring& functionName, const std::wstring& uid)
-            : Function(inputs, GetOutputVariables(op, inputs, this, functionConfig), std::move(functionConfig), functionName, uid), m_op(op)
+            : Function(inputs, GetOutputVariables(op, inputs, this, functionConfig, functionName), std::move(functionConfig), functionName, uid), m_op(op)
         {
         }
 
@@ -413,7 +413,7 @@ namespace CNTK
 
     private:
         PrimitiveOpType m_op;
-        static const size_t s_modelVersion = 1;
+        static const size_t s_serializationVersion = 1;
     };
 
     class CNTKBackPropState final : public BackPropState
@@ -488,7 +488,7 @@ namespace CNTK
 
         virtual Dictionary Serialize() const override;
 
-        virtual size_t CurrentVersion() const override { return s_modelVersion; }
+        virtual size_t CurrentVersion() const override { return s_serializationVersion; }
 
         static FunctionPtr Load(const Dictionary& dictionary, const CNTK::DeviceDescriptor& device);
 
@@ -503,9 +503,6 @@ namespace CNTK
                                                 std::unordered_set<Variable>& replacedPlaceholders) override;
 
         CompositeFunction(const FunctionPtr& rootFunction, std::unordered_set<FunctionPtr>&& allPrimitiveFunctions, const std::wstring& name)
-            : Function({}, rootFunction->Outputs(), Dictionary(), rootFunction, name), m_allPrimitiveFunctions(std::move(allPrimitiveFunctions))
-            : Function({}, rootFunction->Outputs(), Dictionary(), rootFunction, name, Internal::GenerateUid(L"CompositeFunction")), 
-            m_allPrimitiveFunctions(std::move(allPrimitiveFunctions))
             : Function({}, rootFunction->Outputs(), Dictionary(), rootFunction, name, Internal::GenerateUid(L"CompositeFunction")),
             m_allPrimitiveFunctions(std::move(allPrimitiveFunctions)), m_networkMatricesAllocated(false)
         {}
@@ -557,12 +554,12 @@ namespace CNTK
             Traverse(rootFunction, visitedFunctions, [&inputs](const FunctionPtr& function) {
                         std::vector<Variable> functionInputs = function->Inputs();
                         for (const auto& input : functionInputs)
-            {
+                        {
                             if (!input.IsOutput())
-                {
+                            {
                                 inputs.push_back(input);
-                }
-            }
+                            }
+                        }
                     });
             return inputs;
         }
@@ -636,7 +633,7 @@ namespace CNTK
 
         bool m_networkMatricesAllocated;
 
-        static const size_t s_modelVersion = 1;
+        static const size_t s_serializationVersion = 1;
     };
 
     inline std::vector<CNTK::Axis> DynamicAxesFromInternalDynamicAxisName(const std::wstring& internalDynamicAxisName)

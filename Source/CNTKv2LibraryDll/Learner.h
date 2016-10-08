@@ -23,23 +23,9 @@ namespace CNTK
 
         virtual Dictionary Serialize() const override final;
 
-        virtual size_t CurrentVersion() const override final { return s_checkpointVersion; }
+        virtual size_t CurrentVersion() const override final { return s_serializationVersion; }
 
         virtual void RestoreFromCheckpoint(const Dictionary& checkpoint) override final;
-
-        virtual void ResetLearningRate(double learningRate) override final
-        {
-            m_wasLearningRateReset = true;
-            Learner::ResetLearningRate(learningRate);
-        }
-
-        virtual double LearningRate() const override final
-        {
-            if (m_wasLearningRateReset)
-                return Learner::LearningRate();
-            else
-                return m_learningRateSchedule[m_sampleCount];
-        }
 
     protected:
         // allocateSmoothGradients flag specifies whether NDArrayViews for smoothed gradients can be allocated 
@@ -54,9 +40,6 @@ namespace CNTK
         virtual void Update(const Parameter& parameter, const NDArrayViewPtr& gradientValue, const NDArrayViewPtr& smoothedGradientValue, size_t trainingSampleCount) const = 0;
 
         std::string LearnerType() const;
-
-        bool m_wasLearningRateReset;
-        LearningRatesPerSample m_learningRateSchedule;
 
         AdditionalLearningOptions m_additionalOptions;
 
@@ -110,7 +93,7 @@ namespace CNTK
         static bool HasNan(const NDArrayViewPtr& value, const char* name);
         static void Print(const NDArrayViewPtr& value, const char* msg);
 
-        static const size_t s_checkpointVersion = 1;
+        static const size_t s_serializationVersion = 1;
     };
 
     // Vanilla gradient descent optimization algorithm.
