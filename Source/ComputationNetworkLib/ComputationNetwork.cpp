@@ -1523,16 +1523,19 @@ template <class ElemType>
 }
 
 template <class ElemType>
-/*static*/ void ComputationNetwork::SetDropoutRate2(ComputationNetworkPtr net, const ComputationNodeBasePtr& criterionNode, const double dropoutRate, double& prevDropoutRate, size_t randSeedBase)
+/*static*/ void ComputationNetwork::SetDropoutRate2(ComputationNetworkPtr net, const ComputationNodeBasePtr& node, const double dropoutRate, double& prevDropoutRate, size_t randSeedBase)
 {
-    list<ComputationNodeBasePtr> dropoutNodes = net->GetNodesWithType(OperationNameOf(DropoutNode), criterionNode);
+    // Predicate checking if the node is derived from IRngUser
+    function<bool(const ComputationNodeBasePtr&)> nodeIsIRngUser = [](const ComputationNodeBasePtr& node) { return dynamic_cast<IRngUser*>(node.get()) != nullptr; };
 
-    // Each dropout node gets a distinct seed. The actual seed for each dropout node is computed as follows:
-    // seed = (((parallelWorkerIdx * maxEpochs) + currentEpochNum) /*i.e. randSeedBase*/ * dropoutNodes.size()) + dropoutNodeIdx
-    size_t randSeed = randSeedBase * dropoutNodes.size();
-    for (auto& nodeIter : dropoutNodes)
+    list<ComputationNodeBasePtr> rngUserNodes = net->GetNodesWhere(nodeIsIRngUser, node);
+
+    // Each IRngUser gets a distinct seed. This seed is computed as follows:
+    // seed = (((parallelWorkerIdx * maxEpochs) + currentEpochNum) /*i.e. randSeedBase*/ * rngUserNodes.size()) + dropoutNodeIdx.
+    size_t randSeed = randSeedBase * rngUserNodes.size();
+    for (auto& nodeIter : rngUserNodes)
     {
-        auto node = dynamic_pointer_cast<DropoutNode<ElemType>>(nodeIter);
+        auto node = dynamic_cast<IRngUser*>(nodeIter.get());
         node->SetRandomSeed(randSeed);
         randSeed++;
     }
