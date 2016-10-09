@@ -1512,22 +1512,36 @@ template <class ElemType>
             fprintf(stderr, "WARNING: Attempting to set dropout rate, but there is no dropout node in the network.\n");
     }
 
+    for (auto& nodeIter : dropoutNodes)
+    {
+        auto node = dynamic_pointer_cast<DropoutNode<ElemType>>(nodeIter);
+        if (dropoutRate != prevDropoutRate)
+            node->SetDropoutRate(dropoutRate);
+    }
+
+    prevDropoutRate = dropoutRate;
+}
+
+template <class ElemType>
+/*static*/ void ComputationNetwork::SetDropoutRate2(ComputationNetworkPtr net, const ComputationNodeBasePtr& criterionNode, const double dropoutRate, double& prevDropoutRate, size_t randSeedBase)
+{
+    list<ComputationNodeBasePtr> dropoutNodes = net->GetNodesWithType(OperationNameOf(DropoutNode), criterionNode);
+
     // Each dropout node gets a distinct seed. The actual seed for each dropout node is computed as follows:
     // seed = (((parallelWorkerIdx * maxEpochs) + currentEpochNum) /*i.e. randSeedBase*/ * dropoutNodes.size()) + dropoutNodeIdx
     size_t randSeed = randSeedBase * dropoutNodes.size();
     for (auto& nodeIter : dropoutNodes)
     {
         auto node = dynamic_pointer_cast<DropoutNode<ElemType>>(nodeIter);
-        if (dropoutRate != prevDropoutRate)
-            node->SetDropoutRate(dropoutRate);
         node->SetRandomSeed(randSeed);
         randSeed++;
     }
-
-    prevDropoutRate = dropoutRate;
 }
+
 template /*static*/ void ComputationNetwork::SetDropoutRate<float>(ComputationNetworkPtr net, const ComputationNodeBasePtr& criterionNode, const double dropoutRate, double& prevDropoutRate, size_t randSeedBase);
 template /*static*/ void ComputationNetwork::SetDropoutRate<double>(ComputationNetworkPtr net, const ComputationNodeBasePtr& criterionNode, const double dropoutRate, double& prevDropoutRate, size_t randSeedBase);
+template /*static*/ void ComputationNetwork::SetDropoutRate2<float>(ComputationNetworkPtr net, const ComputationNodeBasePtr& criterionNode, const double dropoutRate, double& prevDropoutRate, size_t randSeedBase);
+template /*static*/ void ComputationNetwork::SetDropoutRate2<double>(ComputationNetworkPtr net, const ComputationNodeBasePtr& criterionNode, const double dropoutRate, double& prevDropoutRate, size_t randSeedBase);
 
 
 template void ComputationNetwork::InitLearnableParametersWithBilinearFill<float>(const ComputationNodeBasePtr& node, size_t kernelWidth, size_t kernelHeight);
