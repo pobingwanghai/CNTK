@@ -26,6 +26,7 @@
 #include <stack>
 #include <list>
 #include <set>
+#include "ProgressTracing.h"
 
 using namespace std;
 
@@ -1526,17 +1527,18 @@ template <class ElemType>
 /*static*/ void ComputationNetwork::SetDropoutRate2(ComputationNetworkPtr net, const ComputationNodeBasePtr& node, const double dropoutRate, double& prevDropoutRate, size_t randSeedBase)
 {
     // Predicate checking if the node is derived from IRngUser
-    function<bool(const ComputationNodeBasePtr&)> nodeIsIRngUser = [](const ComputationNodeBasePtr& node) { return dynamic_cast<IRngUser*>(node.get()) != nullptr; };
+    function<bool(const ComputationNodeBasePtr&)> nodeIsIRngUser = [](const ComputationNodeBasePtr& n) { return dynamic_cast<IRngUser*>(n.get()) != nullptr; };
 
     list<ComputationNodeBasePtr> rngUserNodes = net->GetNodesWhere(nodeIsIRngUser, node);
 
+    LOGPRINTF(stderr, "xxxthilo size rngUserNodes=%lu", rngUserNodes.size());
     // Each IRngUser gets a distinct seed. This seed is computed as follows:
     // seed = (((parallelWorkerIdx * maxEpochs) + currentEpochNum) /*i.e. randSeedBase*/ * rngUserNodes.size()) + dropoutNodeIdx.
     size_t randSeed = randSeedBase * rngUserNodes.size();
     for (auto& nodeIter : rngUserNodes)
     {
-        auto node = dynamic_cast<IRngUser*>(nodeIter.get());
-        node->SetRandomSeed(randSeed);
+        auto rngUsr = dynamic_cast<IRngUser*>(nodeIter.get());
+        rngUsr->SetRandomSeed(randSeed);
         randSeed++;
     }
 }
