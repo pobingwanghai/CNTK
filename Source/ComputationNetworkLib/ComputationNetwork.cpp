@@ -1527,7 +1527,7 @@ template <class ElemType>
 /*static*/ void ComputationNetwork::SetDropoutRate2(ComputationNetworkPtr net, const ComputationNodeBasePtr& node, const double dropoutRate, double& prevDropoutRate, size_t randSeedBase)
 {
     // Predicate checking if the node is derived from IRngUser
-    function<bool(const ComputationNodeBasePtr&)> nodeIsIRngUser = [](const ComputationNodeBasePtr& n) { return dynamic_cast<IRngUser*>(n.get()) != nullptr; };
+    function<bool(const ComputationNodeBasePtr&)> nodeIsIRngUser = [](const ComputationNodeBasePtr& n) { return dynamic_cast<RngUser*>(n.get()) != nullptr; };
 
     list<ComputationNodeBasePtr> rngUserNodes = net->GetNodesWhere(nodeIsIRngUser, node);
 
@@ -1537,7 +1537,7 @@ template <class ElemType>
     size_t randSeed = randSeedBase * rngUserNodes.size();
     for (auto& nodeIter : rngUserNodes)
     {
-        auto rngUsr = dynamic_cast<IRngUser*>(nodeIter.get());
+        auto rngUsr = dynamic_cast<RngUser*>(nodeIter.get());
         rngUsr->SetRandomSeed(randSeed);
         randSeed++;
     }
